@@ -97,7 +97,7 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
    <div class="P"><label>LiDAR距离</label><input id="iLR" type="number" value="25"><span class="U">m</span></div>
    <div class="P"><label>LiDAR FOV</label><input id="iLF" type="number" value="180"><span class="U">°</span></div>
    <div class="P"><label>USS距离</label><input id="iUR" type="number" step="0.5" value="5"><span class="U">m</span></div>
-   <div class="P"><label>重规划</label><input id="iRP" type="number" value="3"><span class="U">步</span></div>
+   <div class="P"><label>重规划</label><input id="iRP" type="number" value="1"><span class="U">步</span></div>
    <div class="TG"><label>显示USS扇区</label><div id="tUSS" class="tg on"></div></div>
   </div></div>
   <div class="S"><div class="ST">车辆</div><div class="C">
@@ -723,12 +723,12 @@ const cfg={
   vehicle:{length:4.6,width:1.9,wheelbase:2.75,frontOverhang:0.95,rearOverhang:0.90,
     maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2},
   planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15},
-  replanEvery:3};
+  replanEvery:1};
 function syncCfg(){
   cfg.sensor.lidarRange=+document.getElementById('iLR').value||25;
   cfg.sensor.lidarFov=+document.getElementById('iLF').value||180;
   cfg.sensor.ussRange=+document.getElementById('iUR').value||5;
-  cfg.replanEvery=+document.getElementById('iRP').value||3;
+  cfg.replanEvery=Math.max(1,+document.getElementById('iRP').value||3);
   cfg.vehicle.length=+document.getElementById('iVL').value||4.6;
   cfg.vehicle.width=+document.getElementById('iVW').value||1.9;
   cfg.vehicle.wheelbase=+document.getElementById('iWB').value||2.75;
@@ -752,7 +752,7 @@ function mkScene(){return{t:0,stepN:0,
     {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
     {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
     {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
-let scene=mkScene(),running=false,trajectory=null,perceivedObs=[];
+let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[];
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
 
@@ -772,7 +772,10 @@ async function stepOnce(){
 
   perceivedObs=getPerceivedObs();
   stepsSincePlan++;
-  if(!trajectory||stepsSincePlan>=cfg.replanEvery){
+  const pathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
+    ?isPathBlockedSoon(trajectory,trajectoryIndex,perceivedObs,vp)
+    :false;
+  if(!trajectory||stepsSincePlan>=cfg.replanEvery||pathBlockedSoon){
     planning=true;
     await computeGrid(perceivedObs,vp);
     document.getElementById('mGd').textContent=GPU.ms.toFixed(1)+'ms';
@@ -780,11 +783,13 @@ async function stepOnce(){
     const result=planHybridAStar(scene.ego,goal,vp,cfg.planner);
     lastPlanMs=performance.now()-t1;
     trajectory=result?result.path:null;
+    trajectoryIndex=1;
     stepsSincePlan=0;planning=false;
     planStatus=trajectory?'planning':'nopath';
   }
   if(trajectory&&trajectory.length>=2){
-    const nxt=trajectory[1],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+    trajectoryIndex=pickTrackingIndex(trajectory,trajectoryIndex,scene.ego,vp);
+    const nxt=trajectory[Math.min(trajectoryIndex,trajectory.length-1)],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
     scene.ego.gear=nxt.gear;
     const st=bicStep(scene.ego,nxt.st,nxt.a,vp);
     scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
@@ -796,6 +801,26 @@ async function stepOnce(){
   // Live parking validation
   lastParkVal=validateParking(scene.ego,scene.slot,vp);
   updateMetrics();
+}
+
+function pickTrackingIndex(path,startIdx,ego,vp){
+  if(!path||path.length<2)return 1;
+  let idx=clamp(startIdx||1,1,path.length-1);
+  const catchDist=Math.max(0.3,vp.maxV*vp.dt*0.9);
+  while(idx<path.length-1&&hypot(path[idx].x-ego.x,path[idx].y-ego.y)<catchDist)idx++;
+  return idx;
+}
+
+function isPathBlockedSoon(path,startIdx,obs,vp){
+  if(!path||!obs||!obs.length)return false;
+  const from=clamp(startIdx||1,1,path.length-1);
+  const to=Math.min(path.length-1,from+12);
+  for(let i=from;i<=to;i++){
+    for(const ob of obs){
+      if(egoCol(path[i],vp,ob))return true;
+    }
+  }
+  return false;
 }
 
 function showParkScore(pv){
@@ -1004,7 +1029,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
   b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
 
 function resetSim(){
-  running=false;trajectory=null;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
+  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
   document.getElementById('btnPlay').classList.remove('running');
@@ -1080,7 +1105,7 @@ document.getElementById('btnEvo').addEventListener('click',()=>{
 document.getElementById('btnApply').addEventListener('click',()=>{
   if(!evoState.best)return;
   const b=evoState.best;
-  if(b.path){trajectory=b.path;planStatus='planning';draw();}
+  if(b.path){trajectory=b.path;trajectoryIndex=1;planStatus='planning';draw();}
   alert(`最优参数已应用:\n规划速度=${b.chrome.vPlan.toFixed(2)}\n倒车权重=${b.chrome.wRev.toFixed(2)}\n换挡权重=${b.chrome.wGear.toFixed(2)}\n评分=${b.parkScore.toFixed(0)}/100\n揉库=${b.gears}次\n距离=${b.dist.toFixed(1)}m`);
 });
 
