@@ -804,6 +804,7 @@ applySceneMotionProfile();
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
 let avoidState={active:false,goal:null,causeId:null};
+let avoidTriggerState={id:null,count:0};
 
 // ═══════════ SIMULATION STEP ═══════════
 let planning=false,emergencyHold=false;
@@ -903,21 +904,28 @@ async function stepOnce(){
   planningObstacles=getPlanningObstacles();
 
   if(!avoidState.active){
-    const movingHit=detectMovingObstacleWithin(scene.ego,planningObstacles,2);
+    const movingHit=detectMovingObstacleWithin(scene.ego,planningObstacles,vp,2.0);
     if(movingHit){
-      const avoidGoal=buildAvoidGoal(scene.ego,movingHit,scene.slot.goal);
-      if(avoidGoal){
-        avoidState={active:true,goal:avoidGoal,causeId:movingHit.id||null};
-        trajectory=null;
-        trajectoryIndex=1;
-        stepsSincePlan=cfg.replanEvery;
-        planStatus='avoiding';
+      avoidTriggerState.count=(avoidTriggerState.id===movingHit.id)?(avoidTriggerState.count+1):1;
+      avoidTriggerState.id=movingHit.id||null;
+      if(avoidTriggerState.count>=2){
+        const avoidGoal=buildAvoidGoal(scene.ego,movingHit,scene.slot.goal,planningObstacles,vp);
+        if(avoidGoal){
+          avoidState={active:true,goal:avoidGoal,causeId:movingHit.id||null};
+          trajectory=null;
+          trajectoryIndex=1;
+          stepsSincePlan=cfg.replanEvery;
+          planStatus='avoiding';
+        }
       }
+    }else{
+      avoidTriggerState={id:null,count:0};
     }
   }
 
   if(avoidState.active&&isAvoidGoalReached(scene.ego,avoidState.goal)){
     avoidState={active:false,goal:null,causeId:null};
+    avoidTriggerState={id:null,count:0};
     trajectory=null;
     trajectoryIndex=1;
     stepsSincePlan=cfg.replanEvery;
@@ -1066,27 +1074,88 @@ function isMovingObstacle(ob){
   return (Math.abs(ob.vx||0)>1e-3||Math.abs(ob.vy||0)>1e-3)&&ob.kind!=='停车';
 }
 
-function detectMovingObstacleWithin(ego,obs,r=2){
-  let best=null,bestD=Infinity;
+function getRectCorners(x,y,yaw,w,h){
+  const c=Math.cos(yaw),s=Math.sin(yaw),hw=w/2,hh=h/2;
+  return[
+    {x:x+c*hw-s*hh,y:y+s*hw+c*hh},
+    {x:x+c*hw+s*hh,y:y+s*hw-c*hh},
+    {x:x-c*hw+s*hh,y:y-s*hw-c*hh},
+    {x:x-c*hw-s*hh,y:y-s*hw+c*hh},
+  ];
+}
+
+function rectRectClearance(a,b){
+  if(cpuSAT(a.x,a.y,a.yaw,a.w,a.h,b.x,b.y,b.yaw,b.w,b.h))return 0;
+  const ac=getRectCorners(a.x,a.y,a.yaw,a.w,a.h);
+  const bc=getRectCorners(b.x,b.y,b.yaw,b.w,b.h);
+  let minD=Infinity;
+  for(const p of ac){
+    for(let i=0;i<4;i++)minD=Math.min(minD,pointToSegDist(p,bc[i],bc[(i+1)%4]));
+  }
+  for(const p of bc){
+    for(let i=0;i<4;i++)minD=Math.min(minD,pointToSegDist(p,ac[i],ac[(i+1)%4]));
+  }
+  return minD;
+}
+
+function movingObstacleClearanceToEgo(ego,ob,vp){
+  const egoRect={x:ego.x,y:ego.y,yaw:ego.yaw,w:vp.length+2*vp.inflation,h:vp.width+2*vp.inflation};
+  if(ob.shape==='circle'){
+    const hit=cpuRC(ego.x,ego.y,ego.yaw,egoRect.w,egoRect.h,ob.x,ob.y,ob.r||0.3);
+    if(hit)return 0;
+    const cs=getRectCorners(egoRect.x,egoRect.y,egoRect.yaw,egoRect.w,egoRect.h);
+    let edgeD=Infinity;
+    for(let i=0;i<4;i++)edgeD=Math.min(edgeD,pointToSegDist({x:ob.x,y:ob.y},cs[i],cs[(i+1)%4]));
+    return Math.max(0,edgeD-(ob.r||0.3));
+  }
+  return rectRectClearance(egoRect,{x:ob.x,y:ob.y,yaw:ob.yaw||0,w:ob.w||1,h:ob.h||1});
+}
+
+function detectMovingObstacleWithin(ego,obs,vp,r=2){
+  let best=null,bestGap=Infinity;
   for(const ob of obs){
     if(!isMovingObstacle(ob))continue;
-    const d=hypot((ob.x||0)-ego.x,(ob.y||0)-ego.y);
-    if(d<=r&&d<bestD){best=ob;bestD=d;}
+    const gap=movingObstacleClearanceToEgo(ego,ob,vp);
+    if(gap<=r&&gap<bestGap){best=ob;bestGap=gap;}
   }
   return best;
 }
 
-function buildAvoidGoal(ego,ob,slotGoal){
+function isPoseSafeForAvoidGoal(pose,obs,vp,sourceId){
+  for(const ob of obs){
+    if(sourceId&&ob.id===sourceId)continue;
+    if(egoCol(pose,vp,ob))return false;
+  }
+  return true;
+}
+
+function buildAvoidGoal(ego,ob,slotGoal,obs,vp){
   const dX=ego.x-(ob.x||0),dY=ego.y-(ob.y||0);
   const dN=Math.max(1e-4,hypot(dX,dY));
   const away={x:dX/dN,y:dY/dN};
   const fwd={x:Math.cos(ego.yaw),y:Math.sin(ego.yaw)};
   const side={x:-fwd.y,y:fwd.x};
   const sideSign=Math.sign(side.x*away.x+side.y*away.y)||1;
-  const gx=ego.x+fwd.x*2.6+side.x*sideSign*1.2+away.x*0.9;
-  const gy=ego.y+fwd.y*2.6+side.y*sideSign*1.2+away.y*0.9;
-  const gYaw=wrapPi(ego.yaw+clamp(wrapPi(slotGoal.yaw-ego.yaw),-deg2rad(20),deg2rad(20)));
-  return {x:gx,y:gy,yaw:gYaw};
+  const yawBias=clamp(wrapPi(slotGoal.yaw-ego.yaw),-deg2rad(20),deg2rad(20));
+  const yawSet=[wrapPi(ego.yaw+yawBias),ego.yaw,wrapPi(ego.yaw+yawBias*0.5)];
+  const fwdSet=[2.4,3.0,3.6,1.8];
+  const sideSet=[0.9,1.3,1.8];
+  const awaySet=[0.8,1.2,1.6];
+
+  for(const gyaw of yawSet){
+    for(const fd of fwdSet){
+      for(const sd of sideSet){
+        for(const ad of awaySet){
+          const gx=ego.x+fwd.x*fd+side.x*sideSign*sd+away.x*ad;
+          const gy=ego.y+fwd.y*fd+side.y*sideSign*sd+away.y*ad;
+          if(gx<GPU.xMin+0.8||gx>GPU.xMax-0.8||gy<GPU.yMin+0.8||gy>GPU.yMax-0.8)continue;
+          const cand={x:gx,y:gy,yaw:gyaw,v:0,gear:1};
+          if(isPoseSafeForAvoidGoal(cand,obs||[],vp,ob.id))return {x:gx,y:gy,yaw:gyaw};
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function isAvoidGoalReached(ego,goal){
@@ -1446,6 +1515,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
 function resetSim(){
   running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;resetAlignState();totalDist=0;gearSwitches=0;lastPlanMs=0;
   avoidState={active:false,goal:null,causeId:null};
+  avoidTriggerState={id:null,count:0};
   policyBandit.episode=null;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
