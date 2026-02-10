@@ -1481,70 +1481,42 @@ function pathLength(path){
   return d;
 }
 
-function getParkingPreference(slot){
-  const base={goals:[slot.goal,{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:null,preferStartGear:1,maxGearSwitch:3,mode:'free'};
-  if(!slot)return base;
-
-  if(slot.type==='parallel'){
-    // 侧方位优先倒车入库，更符合驾驶直觉
-    return {...base,goals:[{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:-1,preferStartGear:1,maxGearSwitch:2,mode:'parallel-reverse-in'};
+function getAngledParkingPreference(slot,ego){
+  if(!slot||slot.type!=='angled')return {goals:[slot.goal,{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:null,mode:'normal'};
+  const rel=wrapPi(slot.goal.yaw-(scene.road?.yaw||0));
+  // 顺鱼骨：倒车入库；逆鱼骨：车头泊入
+  const isForwardFishbone=rel>=0;
+  if(isForwardFishbone){
+    return {
+      goals:[{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],
+      finalGear:-1,
+      mode:'reverse-in',
+    };
   }
-
-  if(slot.type==='perpendicular'){
-    // 垂直位默认倒车入库，减少硬切角与反复揉库
-    return {...base,goals:[slot.goal,{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:-1,preferStartGear:1,maxGearSwitch:2,mode:'perpendicular-reverse-in'};
-  }
-
-  if(slot.type==='angled'){
-    const rel=wrapPi(slot.goal.yaw-(scene.road?.yaw||0));
-    // 顺鱼骨：倒车入库；逆鱼骨：车头泊入
-    const isForwardFishbone=rel>=0;
-    if(isForwardFishbone)return {...base,goals:[{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:-1,preferStartGear:1,maxGearSwitch:2,mode:'angled-reverse-in'};
-    return {...base,goals:[slot.goal],finalGear:1,preferStartGear:1,maxGearSwitch:1,mode:'angled-head-in'};
-  }
-
-  return base;
-}
-
-function summarizePathManeuver(path){
-  if(!path||path.length<2)return {startGear:1,tailGear:1,gearSwitch:0,reverseRatio:0};
-  let gearSwitch=0,driveN=0,revN=0;
-  for(let i=1;i<path.length;i++){
-    const g0=path[i-1].gear||1,g1=path[i].gear||1;
-    if(g0!==g1)gearSwitch++;
-    if(g1===-1)revN++;else driveN++;
-  }
-  const tail=path.slice(-Math.min(6,path.length));
-  const tailGear=tail.reduce((acc,p)=>acc+(p.gear||1),0)>=0?1:-1;
   return {
-    startGear:path[1]?.gear||path[0]?.gear||1,
-    tailGear,
-    gearSwitch,
-    reverseRatio:revN/Math.max(1,driveN+revN),
+    goals:[slot.goal],
+    finalGear:1,
+    mode:'head-in',
   };
 }
 
 function planShortestParkingPath(ego,vp,planner,obs){
-  const pref=getParkingPreference(scene.slot);
+  const pref=getAngledParkingPreference(scene.slot,ego);
   const goals=pref.goals;
   let bestRes=null,bestScore=Infinity;
   for(const g of goals){
     const localPc={...planner,goalPosTol:Math.min(0.45,planner.goalPosTol||0.6),goalYawTol:Math.min(8,planner.goalYawTol||15),wCorner:Math.max(0.8,planner.wCorner||0.8)};
     const res=planHybridAStar(ego,g,vp,localPc);
     if(!res)continue;
-
-    const man=summarizePathManeuver(res.path);
-    if(pref.finalGear!==null&&man.tailGear!==pref.finalGear)continue;
-    if(man.gearSwitch>pref.maxGearSwitch)continue;
-
+    if(pref.finalGear!==null&&res.path&&res.path.length>2){
+      const tail=res.path.slice(-Math.min(6,res.path.length));
+      const tailGear=tail.reduce((acc,p)=>acc+(p.gear||1),0)>=0?1:-1;
+      if(tailGear!==pref.finalGear)continue;
+    }
     const len=pathLength(res.path);
     const eva=evaluatePlannedPath(res.path,{...scene.slot,goal:g},vp,obs);
     if(!eva.ok)continue;
-
-    const startPenalty=(man.startGear===pref.preferStartGear)?0:1.8;
-    const switchPenalty=man.gearSwitch*0.95;
-    const reversePenalty=pref.finalGear===1?man.reverseRatio*2.5:0;
-    const score=len+2.2*eva.score+startPenalty+switchPenalty+reversePenalty;
+    const score=len+2.2*eva.score;
     if(score<bestScore){bestScore=score;bestRes=res;}
   }
   return bestRes;
