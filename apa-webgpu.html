@@ -578,6 +578,7 @@ function planHybridAStar(ego0,goal,vp,pc){
   const stSet=[-vp.maxSteer,-0.5*vp.maxSteer,0,0.5*vp.maxSteer,vp.maxSteer];
   const vPA=pc.vPlan||1.5;
   const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1,W_LANE=pc.wLane||7;
+  const laneHardTol=pc.laneHardTol===undefined?Infinity:pc.laneHardTol;
   const goalYawTol=deg2rad(pc.goalYawTol||15),goalPosTol=pc.goalPosTol||0.6;
 
   function disc(x,y,yaw,g){
@@ -633,6 +634,7 @@ function planHybridAStar(ego0,goal,vp,pc){
           if(gridLK(cu.x,cu.y,cu.yaw)){col=true;break;}
         }
         if(col)continue;
+        if(laneOutAmountPose(cu,vp,scene.road)>laneHardTol)continue;
         const k2=disc(cu.x,cu.y,cu.yaw,gear);
         if(closed.has(k2))continue;
         const sl=hypot(cu.x-n.x,cu.y-n.y);
@@ -1022,8 +1024,9 @@ async function stepOnce(){
   const blockedByMoving=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
     ?isPathBlockedSoon(trajectory,trajectoryIndex,trackedMovingObs,vp)
     :false;
+  const motionNeedsAvoid=movingHit?shouldTriggerAvoidByMotion(scene.ego,movingHit,trajectory,trajectoryIndex,vp):false;
 
-  if(avoidState.mode==='none'&&!avoidState.active&&movingHit){
+  if(avoidState.mode==='none'&&!avoidState.active&&movingHit&&motionNeedsAvoid){
     avoidTriggerState.count=(avoidTriggerState.id===movingHit.id)?(avoidTriggerState.count+1):1;
     avoidTriggerState.id=movingHit.id||null;
     if(avoidTriggerState.count>=2){
@@ -1038,7 +1041,7 @@ async function stepOnce(){
   if(avoidState.mode==='wait'){
     scene.ego.v=0;
     const waitT=scene.t-avoidState.startT;
-    if(!movingHit){
+    if(!movingHit||!motionNeedsAvoid){
       resetAvoidState();
       trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='planning';
     }else if((blockedByMoving&&waitT>=1.2)||waitT>=3.5){
@@ -1131,8 +1134,8 @@ async function stepOnce(){
     const t1=performance.now();
     const result=avoidState.active
       ?(avoidState.mode==='reverse'
-        ?planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(6,cfg.planner.maxTime),wRev:Math.min(0.8,cfg.planner.wRev*0.4),wGear:Math.max(9,cfg.planner.wGear*1.1),goalPosTol:Math.min(0.45,cfg.planner.goalPosTol),goalYawTol:Math.min(16,cfg.planner.goalYawTol)})
-        :planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(8,cfg.planner.maxTime),wRev:Math.max(18,cfg.planner.wRev*3.5),wGear:Math.max(12,cfg.planner.wGear*1.5),goalPosTol:Math.min(0.5,cfg.planner.goalPosTol),goalYawTol:Math.min(20,cfg.planner.goalYawTol)}))
+        ?planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(6,cfg.planner.maxTime),wRev:Math.min(0.8,cfg.planner.wRev*0.4),wGear:Math.max(9,cfg.planner.wGear*1.1),goalPosTol:Math.min(0.45,cfg.planner.goalPosTol),goalYawTol:Math.min(16,cfg.planner.goalYawTol),laneHardTol:0.08,wLane:Math.max(20,(cfg.planner.wLane||7)*2.5)})
+        :planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(8,cfg.planner.maxTime),wRev:Math.max(18,cfg.planner.wRev*3.5),wGear:Math.max(12,cfg.planner.wGear*1.5),goalPosTol:Math.min(0.5,cfg.planner.goalPosTol),goalYawTol:Math.min(20,cfg.planner.goalYawTol),laneHardTol:0.08,wLane:Math.max(20,(cfg.planner.wLane||7)*2.5)}))
       :planShortestParkingPath(scene.ego,vp,cfg.planner);
     lastPlanMs=performance.now()-t1;
     trajectory=result?result.path:null;
@@ -1230,13 +1233,19 @@ function updateTrackedMovingObstacles(perceived){
     const id=ob.id||uid();
     seen.add(id);
     const prev=movingObsTracks.get(id);
+    const sx=prev?prev.x*(1-alpha)+ob.x*alpha:ob.x;
+    const sy=prev?prev.y*(1-alpha)+ob.y*alpha:ob.y;
+    const stepDx=prev?(sx-prev.x):0;
+    const stepDy=prev?(sy-prev.y):0;
+    const stepDist=hypot(stepDx,stepDy);
     const cur={
       ...ob,
       id,
-      x:prev?prev.x*(1-alpha)+ob.x*alpha:ob.x,
-      y:prev?prev.y*(1-alpha)+ob.y*alpha:ob.y,
+      x:sx,
+      y:sy,
       vx:prev?(prev.vx||0)*(1-alpha)+(ob.vx||0)*alpha:(ob.vx||0),
       vy:prev?(prev.vy||0)*(1-alpha)+(ob.vy||0)*alpha:(ob.vy||0),
+      stepDx,stepDy,stepDist,
       miss:0,
     };
     movingObsTracks.set(id,cur);
@@ -1289,6 +1298,21 @@ function movingObstacleClearanceToEgo(ego,ob,vp){
   return rectRectClearance(egoRect,{x:ob.x,y:ob.y,yaw:ob.yaw||0,w:ob.w||1,h:ob.h||1});
 }
 
+
+function shouldTriggerAvoidByMotion(ego,ob,trajectory,trajectoryIndex,vp){
+  if(!ob)return false;
+  const dx=ego.x-ob.x,dy=ego.y-ob.y,dn=Math.max(1e-4,hypot(dx,dy));
+  const ux=dx/dn,uy=dy/dn;
+  const toward=(ob.stepDx||0)*ux+(ob.stepDy||0)*uy; // >0 toward ego
+  const movingAway=toward<-0.025;
+  const meaningfulStep=(ob.stepDist||0)>=0.02;
+  const pathThreat=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
+    ?isPathBlockedSoon(trajectory,trajectoryIndex,[ob],vp)
+    :false;
+  if(movingAway&&!pathThreat)return false;
+  return pathThreat||(meaningfulStep&&toward>0.01);
+}
+
 function detectMovingObstacleWithin(ego,obs,vp,r=2){
   let best=null,bestGap=Infinity;
   const seen=new Set();
@@ -1335,6 +1359,7 @@ function buildAvoidGoal(ego,ob,slotGoal,obs,vp){
           const gy=ego.y+fwd.y*fd+side.y*sideSign*sd+away.y*ad;
           if(gx<GPU.xMin+0.8||gx>GPU.xMax-0.8||gy<GPU.yMin+0.8||gy>GPU.yMax-0.8)continue;
           const cand={x:gx,y:gy,yaw:gyaw,v:0,gear:1};
+          if(laneOutAmountPose(cand,vp,scene.road)>0.08)continue;
           if(isPoseSafeForAvoidGoal(cand,obs||[],vp,ob.id))return {x:gx,y:gy,yaw:gyaw};
         }
       }
