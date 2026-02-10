@@ -802,8 +802,26 @@ let showCSpace=false,showUSS=true,lastParkVal=null;
 
 // ═══════════ SIMULATION STEP ═══════════
 let planning=false,emergencyHold=false;
-let alignState={lastGear:1,stuck:0,lastErr:Infinity,steps:0,settle:0};
+let alignState={lastGear:1,lastErr:Infinity,steps:0,startT:0,gearSw:0,steerFlip:0,lastSteerSign:0,abortN:0};
 let policyBandit={policies:[],active:null,episode:null};
+
+
+function resetAlignState(keepAbort=false){
+  alignState={
+    lastGear:1,lastErr:Infinity,steps:0,startT:0,
+    gearSw:0,steerFlip:0,lastSteerSign:0,
+    abortN:keepAbort?alignState.abortN:0
+  };
+}
+
+function exceedAlignLimits(scene,vp){
+  const maxSteps=75;
+  const maxTime=11.5;
+  const maxGearSwitch=7;
+  const maxSteerFlip=9;
+  const dt=Math.max(0,scene.t-alignState.startT);
+  return alignState.steps>maxSteps||dt>maxTime||alignState.gearSw>maxGearSwitch||alignState.steerFlip>maxSteerFlip;
+}
 
 function initPolicyBandit(){
   if(policyBandit.policies.length)return;
@@ -892,20 +910,30 @@ async function stepOnce(){
   }
 
   if(shouldRunFinalAlign(scene.ego,scene.slot,vp)){
+    if(planStatus!=='aligning'||alignState.steps===0)alignState.startT=scene.t;
     planStatus='aligning';
     const ok=runFinalAlignStep(scene.ego,scene.slot,vp,planningObstacles);
     scene.t+=dt;scene.stepN++;simStepCount++;
     lastParkVal=validateParking(scene.ego,scene.slot,vp);
+
     if(ok&&(isStrictAligned(scene.ego,scene.slot,vp)||isCenteredEnoughToStop(scene.ego,scene.slot,vp))){
       planStatus='success';running=false;
       updatePolicyReward(true);
       document.getElementById('btnPlay').textContent='▶ 开始';
       document.getElementById('btnPlay').classList.remove('running');
       showParkScore(lastParkVal);
-    }else if(alignState.steps>90&&alignState.settle>14){
-      // avoid endless nudging: hand back to global planner for a fresh approach
+      resetAlignState();
+    }else if(exceedAlignLimits(scene,vp)){
+      // hard guard: prohibit endless angle rocking / shunting in final alignment
+      alignState.abortN++;
+      resetAlignState(true);
       trajectory=null;stepsSincePlan=cfg.replanEvery;planStatus='planning';
-      alignState.steps=0;alignState.settle=0;
+      if(alignState.abortN>=2){
+        // two failed fine-align attempts: stop this episode and wait for restart/replan
+        running=false;planStatus='nopath';
+        document.getElementById('btnPlay').textContent='▶ 开始';
+        document.getElementById('btnPlay').classList.remove('running');
+      }
     }
     updateMetrics();
     return;
@@ -1035,7 +1063,6 @@ function runFinalAlignStep(ego,slot,vp,obs){
   const e0=poseErrorInGoalFrame(ego,slot.goal);
   const yawAbs=Math.abs(e0.yawErr),longAbs=Math.abs(e0.longErr);
 
-  // prioritize heading + centerline; reduce pointless fore/aft twitching near center
   let desiredSteer=clamp(-(3.4*e0.yawErr+2.1*e0.latErr),-vp.maxSteer*0.95,vp.maxSteer*0.95);
   if(yawAbs>deg2rad(4.5)){
     const minTurn=vp.maxSteer*0.32;
@@ -1078,18 +1105,19 @@ function runFinalAlignStep(ego,slot,vp,obs){
         let minGap=Infinity;
         for(const c of corners)minGap=Math.min(minGap,pointToPolyDist(c,slot.poly));
         const outPenalty=minGap< -0.14 ? Math.abs(minGap)*18 : 0;
-        const switchPenalty=gear!==alignState.lastGear?0.42:0;
-        const steerPenalty=0.08*Math.abs(steer-desiredSteer)+0.03*Math.abs(steer);
+        const switchPenalty=gear!==alignState.lastGear?0.52:0;
+        const sign=Math.abs(steer)>vp.maxSteer*0.08?Math.sign(steer):0;
+        const flipPenalty=(sign!==0&&alignState.lastSteerSign!==0&&sign!==alignState.lastSteerSign)?0.42:0;
+        const steerPenalty=0.10*Math.abs(steer-desiredSteer)+0.03*Math.abs(steer);
         const progress=(Math.abs(e0.yawErr)+1.25*Math.abs(e0.latErr)+1.35*Math.abs(e0.longErr))-(Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr));
-        const cost=4.1*Math.abs(ne.yawErr)+3.3*Math.abs(ne.latErr)+2.4*Math.abs(ne.longErr)+switchPenalty+steerPenalty+outPenalty-1.25*progress;
-        if(!best||cost<best.cost)best={st,gear,cost};
+        const cost=4.3*Math.abs(ne.yawErr)+3.4*Math.abs(ne.latErr)+2.5*Math.abs(ne.longErr)+switchPenalty+flipPenalty+steerPenalty+outPenalty-1.2*progress;
+        if(!best||cost<best.cost)best={st,gear,steer,cost};
       }
     }
   }
 
   if(!best){
     alignState.lastGear*=-1;
-    alignState.settle++;
     ego.v=0;
     return false;
   }
@@ -1098,17 +1126,15 @@ function runFinalAlignStep(ego,slot,vp,obs){
   ego.gear=best.gear;ego.x=best.st.x;ego.y=best.st.y;ego.yaw=best.st.yaw;ego.v=best.st.v;
   totalDist+=hypot(best.st.x-px,best.st.y-py);
 
+  if(best.gear!==alignState.lastGear)alignState.gearSw++;
+  const steerSign=Math.abs(best.steer)>vp.maxSteer*0.08?Math.sign(best.steer):0;
+  if(steerSign!==0&&alignState.lastSteerSign!==0&&steerSign!==alignState.lastSteerSign)alignState.steerFlip++;
+  if(steerSign!==0)alignState.lastSteerSign=steerSign;
+
   const ne=poseErrorInGoalFrame(ego,slot.goal);
   const newErr=Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr);
-  if(newErr>alignState.lastErr-8e-4){alignState.stuck++;alignState.settle++;}else{alignState.stuck=0;alignState.settle=Math.max(0,alignState.settle-1);} 
   alignState.lastErr=newErr;
   alignState.lastGear=best.gear;
-
-  if(alignState.stuck>7&&Math.abs(ne.longErr)<0.12){
-    // stop early oscillation around center and let success condition capture it
-    ego.v*=0.45;
-    alignState.lastGear*=-1;
-  }
   return true;
 }
 
@@ -1318,7 +1344,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
   b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
 
 function resetSim(){
-  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;alignState={lastGear:1,stuck:0,lastErr:Infinity,steps:0,settle:0};totalDist=0;gearSwitches=0;lastPlanMs=0;
+  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;resetAlignState();totalDist=0;gearSwitches=0;lastPlanMs=0;
   policyBandit.episode=null;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
