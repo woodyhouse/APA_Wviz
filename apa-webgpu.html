@@ -770,9 +770,27 @@ function syncCfg(){
 document.querySelectorAll('#pn input').forEach(el=>el.addEventListener('input',syncCfg));syncCfg();
 
 // ═══════════ SCENE ═══════════
+function getSlotSize(type,vp=cfg.vehicle){
+  const longMargin=type==='parallel'?1.4:1.1;
+  const latMargin=0.9;
+  return{len:vp.length+longMargin,wid:vp.width+latMargin};
+}
+
+function makeSlot(goal,type='parallel'){
+  const d=getSlotSize(type,cfg.vehicle),hl=d.len/2,hw=d.wid/2;
+  const c=Math.cos(goal.yaw),sg=Math.sin(goal.yaw);
+  const poly=[
+    {x:goal.x+c*hl-sg*hw,y:goal.y+sg*hl+c*hw},
+    {x:goal.x+c*hl+sg*hw,y:goal.y+sg*hl-c*hw},
+    {x:goal.x-c*hl+sg*hw,y:goal.y-sg*hl-c*hw},
+    {x:goal.x-c*hl-sg*hw,y:goal.y-sg*hl+c*hw},
+  ];
+  return{poly,goal:{...goal},type};
+}
+
 function mkScene(){return{t:0,stepN:0,
   ego:{x:2,y:4,yaw:0,v:0,gear:1},
-  slot:{poly:[{x:7.5,y:2.2},{x:14,y:2.2},{x:14,y:-0.2},{x:7.5,y:-0.2}],goal:{x:10.75,y:1.0,yaw:0},type:'parallel'},
+  slot:makeSlot({x:10.75,y:1.0,yaw:0},'parallel'),
   obstacles:[
     {id:uid(),shape:'rect',x:5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
     {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
@@ -1003,24 +1021,42 @@ function isStrictAligned(ego,slot,vp){
 }
 
 function runFinalAlignStep(ego,slot,vp,obs){
-  const e=poseErrorInGoalFrame(ego,slot.goal);
-  const gearSet=[alignState.lastGear,-alignState.lastGear];
-  const steerSet=[-0.65,-0.35,-0.15,0,0.15,0.35,0.65].map(k=>k*vp.maxSteer);
-  const speedSet=[0.18,0.28,0.4];
-  let best=null;
+  const e0=poseErrorInGoalFrame(ego,slot.goal);
+  const yawAbs=Math.abs(e0.yawErr),latAbs=Math.abs(e0.latErr),longAbs=Math.abs(e0.longErr);
 
+  let desiredSteer=clamp(-(2.9*e0.yawErr+1.7*e0.latErr),-vp.maxSteer*0.92,vp.maxSteer*0.92);
+  if(yawAbs>deg2rad(6)){
+    const minTurn=vp.maxSteer*0.28;
+    if(Math.abs(desiredSteer)<minTurn)desiredSteer=Math.sign(desiredSteer||e0.yawErr||1)*minTurn;
+  }
+
+  const gearPref=longAbs>0.12?(e0.longErr>0?-1:1):alignState.lastGear;
+  const gearSet=[gearPref,-gearPref];
+  const speedSet=[0.16,0.24,0.34];
+  const steerSet=[
+    clamp(desiredSteer*1.2,-vp.maxSteer,vp.maxSteer),
+    desiredSteer,
+    clamp(desiredSteer*0.75,-vp.maxSteer,vp.maxSteer),
+    clamp(desiredSteer+vp.maxSteer*0.22,-vp.maxSteer,vp.maxSteer),
+    clamp(desiredSteer-vp.maxSteer*0.22,-vp.maxSteer,vp.maxSteer),
+    0,
+  ];
+
+  let best=null;
   for(const gear of gearSet){
     for(const sp of speedSet){
       for(const steer of steerSet){
-        const targetV=gear*sp;
-        const a=clamp((targetV-ego.v)/vp.dt,-vp.maxA,vp.maxA);
-        const probe={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear};
-        const st=bicStep(probe,steer,a,vp);
-
+        let st={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear};
+        const a=clamp((gear*sp-ego.v)/vp.dt,-vp.maxA,vp.maxA);
         let hit=false;
-        for(const ob of obs){
-          const pob={...ob,x:ob.x+(ob.vx||0)*vp.dt,y:ob.y+(ob.vy||0)*vp.dt};
-          if(egoCol(st,vp,pob)){hit=true;break;}
+        for(let k=0;k<3;k++){
+          st=bicStep(st,steer,a,vp);
+          const tPred=(k+1)*vp.dt;
+          for(const ob of obs){
+            const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+            if(egoCol(st,vp,pob)){hit=true;break;}
+          }
+          if(hit)break;
         }
         if(hit)continue;
 
@@ -1028,25 +1064,32 @@ function runFinalAlignStep(ego,slot,vp,obs){
         const corners=getEgoCorners(st,vp);
         let minGap=Infinity;
         for(const c of corners)minGap=Math.min(minGap,pointToPolyDist(c,slot.poly));
-        const outPenalty=minGap< -0.08 ? (Math.abs(minGap)*40) : 0;
-        const switchPenalty=gear!==alignState.lastGear?0.35:0;
-        const cost=3.2*Math.abs(ne.yawErr)+2.4*Math.abs(ne.latErr)+1.2*Math.abs(ne.longErr)+0.25*Math.abs(steer)+switchPenalty+outPenalty;
+        const outPenalty=minGap< -0.16 ? Math.abs(minGap)*18 : 0;
+        const switchPenalty=gear!==alignState.lastGear?0.24:0;
+        const steerPenalty=0.08*Math.abs(steer-desiredSteer)+0.03*Math.abs(steer);
+        const progress=(Math.abs(e0.yawErr)+Math.abs(e0.latErr)+0.7*Math.abs(e0.longErr))-(Math.abs(ne.yawErr)+Math.abs(ne.latErr)+0.7*Math.abs(ne.longErr));
+        const cost=3.6*Math.abs(ne.yawErr)+2.8*Math.abs(ne.latErr)+1.15*Math.abs(ne.longErr)+switchPenalty+steerPenalty+outPenalty-1.2*progress;
         if(!best||cost<best.cost)best={st,gear,cost};
       }
     }
   }
 
-  if(!best){engageEmergencyStop();return false;}
+  if(!best){
+    alignState.lastGear*=-1;
+    ego.v=0;
+    return false;
+  }
+
   const px=ego.x,py=ego.y;
   ego.gear=best.gear;ego.x=best.st.x;ego.y=best.st.y;ego.yaw=best.st.yaw;ego.v=best.st.v;
   totalDist+=hypot(best.st.x-px,best.st.y-py);
 
   const ne=poseErrorInGoalFrame(ego,slot.goal);
   const newErr=Math.abs(ne.yawErr)+Math.abs(ne.latErr)+Math.abs(ne.longErr);
-  if(newErr>alignState.lastErr-1e-3)alignState.stuck++; else alignState.stuck=0;
+  if(newErr>alignState.lastErr-1e-3)alignState.stuck++;else alignState.stuck=0;
   alignState.lastErr=newErr;
   alignState.lastGear=best.gear;
-  if(alignState.stuck>8)alignState.lastGear*=-1;
+  if(alignState.stuck>10)alignState.lastGear*=-1;
   return true;
 }
 
@@ -1281,8 +1324,7 @@ document.getElementById('btnP1').addEventListener('click',()=>{
 document.getElementById('btnP2').addEventListener('click',()=>{
   // 垂直泊车
   scene={t:0,stepN:0,ego:{x:-4,y:5,yaw:0,v:0,gear:1},
-    slot:{poly:[{x:5,y:3.2},{x:8,y:3.2},{x:8,y:-1.2},{x:5,y:-1.2}],
-      goal:{x:6.5,y:1.0,yaw:deg2rad(-90)},type:'perpendicular'},
+    slot:makeSlot({x:6.5,y:1.0,yaw:deg2rad(-90)},'perpendicular'),
     obstacles:[
       {id:uid(),shape:'rect',x:3.2,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:9.8,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
@@ -1296,11 +1338,11 @@ document.getElementById('btnP3').addEventListener('click',()=>{
   // 斜向泊车 (60°)
   const ang=deg2rad(60);
   scene={t:0,stepN:0,ego:{x:-3,y:6,yaw:0,v:0,gear:1},
-    slot:{poly:[
-      {x:6,y:3},{x:6+Math.cos(ang)*3,y:3+Math.sin(ang)*3},
-      {x:6+Math.cos(ang)*3-Math.sin(ang)*5,y:3+Math.sin(ang)*3+Math.cos(ang)*5},
-      {x:6-Math.sin(ang)*5,y:3+Math.cos(ang)*5}],
-      goal:{x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,yaw:ang-PI/2},type:'angled'},
+    slot:makeSlot({
+      x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,
+      y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,
+      yaw:ang-PI/2
+    },'angled'),
     obstacles:[
       {id:uid(),shape:'rect',x:4,y:2,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:8.5,y:5,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
@@ -1311,7 +1353,7 @@ document.getElementById('btnP3').addEventListener('click',()=>{
 document.getElementById('btnP4').addEventListener('click',()=>{
   // 压力测试 - 多障碍物、动态
   scene={t:0,stepN:0,ego:{x:-2,y:6,yaw:0,v:0,gear:1},
-    slot:{poly:[{x:7,y:2.5},{x:14,y:2.5},{x:14,y:-0.5},{x:7,y:-0.5}],goal:{x:10.5,y:1.0,yaw:0},type:'parallel'},
+    slot:makeSlot({x:10.5,y:1.0,yaw:0},'parallel'),
     obstacles:[
       {id:uid(),shape:'rect',x:4.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:17,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
@@ -1361,7 +1403,7 @@ canvas.addEventListener('pointerdown',e=>{
   if(mode==='rect'){const ob={id:uid(),shape:'rect',x:w.x,y:w.y,yaw:0,w:1.8,h:0.8,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='circle'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.35,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-0.3,vy:0,kind:'行人'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
-  if(mode==='slot'){scene.slot.poly=[{x:w.x-2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y-1.2},{x:w.x-2.75,y:w.y-1.2}];scene.slot.goal={x:w.x,y:w.y,yaw:0};selected={type:'slot'};draw();return;}
+  if(mode==='slot'){scene.slot=makeSlot({x:w.x,y:w.y,yaw:0},'parallel');selected={type:'slot'};draw();return;}
   const hit=pickObj(w.x,w.y);selected=hit;
   if(hit){dragging=true;if(hit.type==='ego')dragOff={x:scene.ego.x-w.x,y:scene.ego.y-w.y};
     else if(hit.type==='ob'){const ob=scene.obstacles.find(o=>o.id===hit.id);if(ob)dragOff={x:ob.x-w.x,y:ob.y-w.y};}
