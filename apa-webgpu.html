@@ -537,7 +537,7 @@ function planHybridAStar(ego0,goal,vp,pc){
   const rXY=pc.resXY,rYaw=pc.resYaw||36;
   const stSet=[-vp.maxSteer,-0.5*vp.maxSteer,0,0.5*vp.maxSteer,vp.maxSteer];
   const vPA=pc.vPlan||1.5;
-  const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1;
+  const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1,W_LANE=pc.wLane||7;
   const goalYawTol=deg2rad(pc.goalYawTol||15),goalPosTol=pc.goalPosTol||0.6;
 
   function disc(x,y,yaw,g){
@@ -600,6 +600,7 @@ function planHybridAStar(ego0,goal,vp,pc){
         if(gear===-1)cost+=W_REV*sl;
         if(gear!==n.gear)cost+=W_GEAR;
         cost+=W_STEER*Math.abs(steer-n.st);
+        cost+=W_LANE*laneOutAmountPose(cu,vp,scene.road)*sl;
         const g2=n.g+cost;
         const old=bestG.get(k2);
         if(old===undefined||g2<old){
@@ -802,8 +803,38 @@ function makeSlot(goal,type='parallel'){
   return{poly,goal:{...goal},type};
 }
 
+
+function makeTwoWaySingleLaneRoad(yCenter=3.6,laneWidth=3.4){
+  return {yCenter,laneWidth,shoulder:0.25};
+}
+
+function laneOutAmountY(y,road){
+  if(!road)return 0;
+  const limit=road.laneWidth+road.shoulder;
+  return Math.max(0,Math.abs(y-road.yCenter)-limit);
+}
+
+function laneOutAmountPose(pose,vp,road){
+  if(!road)return 0;
+  const corners=getEgoCorners(pose,vp);
+  let out=0;
+  for(const c of corners)out=Math.max(out,laneOutAmountY(c.y,road));
+  return out;
+}
+
+function keepOncomingInOppositeLane(){
+  if(!scene||!scene.road)return;
+  const r=scene.road;
+  const egoLane=Math.sign(scene.ego.y-r.yCenter)||1;
+  const oncomingLaneY=r.yCenter-egoLane*r.laneWidth*0.5;
+  for(const ob of scene.obstacles||[]){
+    if(ob.kind==='对向车')ob.y=oncomingLaneY;
+  }
+}
+
 function mkScene(){return{t:0,stepN:0,
-  ego:{x:2,y:4,yaw:0,v:0,gear:1},
+  road:makeTwoWaySingleLaneRoad(3.6,3.4),
+  ego:{x:2,y:5.3,yaw:0,v:0,gear:1},
   slot:makeSlot({x:10.75,y:1.0,yaw:0},'parallel'),
   obstacles:[
     {id:uid(),shape:'rect',x:5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
@@ -813,6 +844,7 @@ function mkScene(){return{t:0,stepN:0,
 let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[],planningObstacles=[];
 syncCfg();
 applySceneMotionProfile();
+keepOncomingInOppositeLane();
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
 let avoidState={active:false,goal:null,causeId:null};
@@ -1251,6 +1283,7 @@ function applyMotionProfile(ob){
 
 function applySceneMotionProfile(){
   for(const ob of scene.obstacles)applyMotionProfile(ob);
+  keepOncomingInOppositeLane();
 }
 
 function syncOncomingVehicleSize(){
@@ -1341,7 +1374,8 @@ function runFinalAlignStep(ego,slot,vp,obs){
         const flipPenalty=(sign!==0&&alignState.lastSteerSign!==0&&sign!==alignState.lastSteerSign)?0.42:0;
         const steerPenalty=0.10*Math.abs(steer-desiredSteer)+0.03*Math.abs(steer);
         const progress=(Math.abs(e0.yawErr)+1.25*Math.abs(e0.latErr)+1.35*Math.abs(e0.longErr))-(Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr));
-        const cost=4.3*Math.abs(ne.yawErr)+3.4*Math.abs(ne.latErr)+2.5*Math.abs(ne.longErr)+switchPenalty+flipPenalty+steerPenalty+outPenalty-1.2*progress;
+        const lanePenalty=laneOutAmountPose(st,vp,scene.road)*4.0;
+        const cost=4.3*Math.abs(ne.yawErr)+3.4*Math.abs(ne.latErr)+2.5*Math.abs(ne.longErr)+switchPenalty+flipPenalty+steerPenalty+outPenalty+lanePenalty-1.2*progress;
         if(!best||cost<best.cost)best={st,gear,steer,cost};
       }
     }
@@ -1400,7 +1434,7 @@ function updateMetrics(){
 // ═══════════ DRAWING ═══════════
 function draw(){
   const W=canvas.width/dpr,H=canvas.height/dpr;ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
-  drawGrid(W,H);if(showCSpace&&GPU.grid)drawCSpace();drawSlot();drawSensorFOV();
+  drawGrid(W,H);drawRoadLanes();if(showCSpace&&GPU.grid)drawCSpace();drawSlot();drawSensorFOV();
   if(showUSS)drawUSS();
   if(trajectory&&trajectory.length>1)drawTraj();drawObs();drawEgo();drawGoal();
   if(lastParkVal&&planStatus==='success')drawParkResult();
@@ -1427,6 +1461,24 @@ function drawCSpace(){
         const s=w2s(wx,GPU.yMin+iy*st);ctx.fillRect(s.x-sp/2,s.y-sp/2,sp,sp);}}}
   ctx.restore();
 }
+
+function drawRoadLanes(){
+  const r=scene.road;if(!r)return;
+  const x0=GPU.xMin,x1=GPU.xMax;
+  const yTop=r.yCenter+r.laneWidth,yBot=r.yCenter-r.laneWidth;
+  const p0=w2s(x0,yTop),p1=w2s(x1,yBot);
+  ctx.save();
+  ctx.fillStyle='rgba(148,163,184,.06)';
+  ctx.fillRect(p0.x,p0.y,p1.x-p0.x,p1.y-p0.y);
+  const b1=w2s(x0,yTop),b2=w2s(x1,yTop),b3=w2s(x0,yBot),b4=w2s(x1,yBot),c1=w2s(x0,r.yCenter),c2=w2s(x1,r.yCenter);
+  ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.8;
+  ctx.beginPath();ctx.moveTo(b1.x,b1.y);ctx.lineTo(b2.x,b2.y);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(b3.x,b3.y);ctx.lineTo(b4.x,b4.y);ctx.stroke();
+  ctx.strokeStyle='rgba(250,204,21,.6)';ctx.lineWidth=1.2;ctx.setLineDash([8,6]);
+  ctx.beginPath();ctx.moveTo(c1.x,c1.y);ctx.lineTo(c2.x,c2.y);ctx.stroke();ctx.setLineDash([]);
+  ctx.restore();
+}
+
 function drawSlot(){
   const poly=scene.slot.poly;if(poly.length<3)return;ctx.save();
   ctx.beginPath();const p0=w2s(poly[0].x,poly[0].y);ctx.moveTo(p0.x,p0.y);
@@ -1603,7 +1655,7 @@ document.getElementById('btnP1').addEventListener('click',()=>{
 
 document.getElementById('btnP2').addEventListener('click',()=>{
   // 垂直泊车
-  scene={t:0,stepN:0,ego:{x:-4,y:5,yaw:0,v:0,gear:1},
+  scene={t:0,stepN:0,road:makeTwoWaySingleLaneRoad(3.6,3.4),ego:{x:-4,y:5.3,yaw:0,v:0,gear:1},
     slot:makeSlot({x:6.5,y:1.0,yaw:deg2rad(-90)},'perpendicular'),
     obstacles:[
       {id:uid(),shape:'rect',x:3.2,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
@@ -1616,25 +1668,21 @@ document.getElementById('btnP2').addEventListener('click',()=>{
 });
 
 document.getElementById('btnP3').addEventListener('click',()=>{
-  // 斜向泊车 (60°)
+  // 斜向泊车（鱼骨车位）
   const ang=deg2rad(60);
-  scene={t:0,stepN:0,ego:{x:-3,y:6,yaw:0,v:0,gear:1},
-    slot:makeSlot({
-      x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,
-      y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,
-      yaw:ang-PI/2
-    },'angled'),
+  scene={t:0,stepN:0,road:makeTwoWaySingleLaneRoad(3.6,3.4),ego:{x:-3,y:5.4,yaw:0,v:0,gear:1},
+    slot:makeSlot({x:8.1,y:2.4,yaw:ang},'angled'),
     obstacles:[
-      {id:uid(),shape:'rect',x:4,y:2,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'rect',x:8.5,y:5,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'circle',x:2,y:7,yaw:0,r:0.3,vx:0.2,vy:0,kind:'行人'}]};
+      {id:uid(),shape:'rect',x:5.6,y:2.4,yaw:ang,w:4.5,h:1.9,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'rect',x:10.6,y:2.4,yaw:ang,w:4.5,h:1.9,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'circle',x:1.8,y:7.0,yaw:0,r:0.3,vx:0.2,vy:0,kind:'行人'}]};
   applySceneMotionProfile();
   resetSim();
 });
 
 document.getElementById('btnP4').addEventListener('click',()=>{
   // 压力测试 - 多障碍物、动态
-  scene={t:0,stepN:0,ego:{x:-2,y:6,yaw:0,v:0,gear:1},
+  scene={t:0,stepN:0,road:makeTwoWaySingleLaneRoad(3.6,3.4),ego:{x:-2,y:5.4,yaw:0,v:0,gear:1},
     slot:makeSlot({x:10.5,y:1.0,yaw:0},'parallel'),
     obstacles:[
       {id:uid(),shape:'rect',x:4.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
@@ -1646,7 +1694,7 @@ document.getElementById('btnP4').addEventListener('click',()=>{
       {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'护栏'},
       {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.65,vy:0,kind:'自行车'},
-      {id:uid(),shape:'rect',x:12,y:5,yaw:PI,w:4.6,h:1.9,vx:-0.35,vy:0,kind:'对向车'}]};
+      {id:uid(),shape:'rect',x:12,y:1.9,yaw:PI,w:4.6,h:1.9,vx:-0.35,vy:0,kind:'对向车'}]};
   applySceneMotionProfile();
   resetSim();
 });
