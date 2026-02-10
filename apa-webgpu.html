@@ -847,7 +847,7 @@ applySceneMotionProfile();
 keepOncomingInOppositeLane();
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
-let avoidState={active:false,goal:null,causeId:null};
+let avoidState={active:false,goal:null,causeId:null,mode:'none',startT:0};
 let avoidTriggerState={id:null,count:0};
 let movingObsTracks=new Map();
 let avoidRangeLatch=new Map();
@@ -932,6 +932,34 @@ function updatePolicyReward(success){
   try{localStorage.setItem('apaPolicyBandit',JSON.stringify(policyBandit.policies.map(x=>({n:x.n,reward:x.reward,best:x.best}))));}catch(_){ }
 }
 
+function resetAvoidState(){
+  avoidState={active:false,goal:null,causeId:null,mode:'none',startT:0};
+  avoidTriggerState={id:null,count:0};
+}
+
+function buildReverseYieldGoal(ego,vp,obs){
+  const bx=-Math.cos(ego.yaw),by=-Math.sin(ego.yaw);
+  const side={x:-by,y:bx};
+  const distSet=[1.4,2.0,2.8,3.4];
+  const sideSet=[0,0.4,-0.4];
+  for(const d of distSet){
+    for(const sd of sideSet){
+      const gx=ego.x+bx*d+side.x*sd,gy=ego.y+by*d+side.y*sd;
+      if(gx<GPU.xMin+0.8||gx>GPU.xMax-0.8||gy<GPU.yMin+0.8||gy>GPU.yMax-0.8)continue;
+      const cand={x:gx,y:gy,yaw:ego.yaw,v:0,gear:-1};
+      if(laneOutAmountPose(cand,vp,scene.road)>0.25)continue;
+      if(isPoseSafeForAvoidGoal(cand,obs||[],vp,null))return {x:gx,y:gy,yaw:ego.yaw};
+    }
+  }
+  return null;
+}
+
+function advanceSceneOnly(dt){
+  for(const ob of scene.obstacles){if(ob.vx||ob.vy){ob.x+=(ob.vx||0)*dt;ob.y+=(ob.vy||0)*dt;}}
+  scene.t+=dt;scene.stepN++;simStepCount++;
+  lastParkVal=validateParking(scene.ego,scene.slot,cfg.vehicle);
+}
+
 async function stepOnce(){
   if(planning)return;syncCfg();
   const vp=cfg.vehicle,dt=vp.dt;
@@ -950,29 +978,49 @@ async function stepOnce(){
   const trackedMovingObs=updateTrackedMovingObstacles(perceivedObs);
   planningObstacles=getPlanningObstacles();
 
-  if(!avoidState.active){
-    const movingHit=detectMovingObstacleWithin(scene.ego,trackedMovingObs,vp,2.0);
-    if(movingHit){
-      avoidTriggerState.count=(avoidTriggerState.id===movingHit.id)?(avoidTriggerState.count+1):1;
-      avoidTriggerState.id=movingHit.id||null;
-      if(avoidTriggerState.count>=2){
-        const avoidGoal=buildAvoidGoal(scene.ego,movingHit,scene.slot.goal,planningObstacles,vp);
-        if(avoidGoal){
-          avoidState={active:true,goal:avoidGoal,causeId:movingHit.id||null};
-          trajectory=null;
-          trajectoryIndex=1;
-          stepsSincePlan=cfg.replanEvery;
-          planStatus='avoiding';
+  const movingHit=detectMovingObstacleWithin(scene.ego,trackedMovingObs,vp,2.0);
+  const blockedByMoving=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
+    ?isPathBlockedSoon(trajectory,trajectoryIndex,trackedMovingObs,vp)
+    :false;
+
+  if(avoidState.mode==='none'&&!avoidState.active&&movingHit){
+    avoidTriggerState.count=(avoidTriggerState.id===movingHit.id)?(avoidTriggerState.count+1):1;
+    avoidTriggerState.id=movingHit.id||null;
+    if(avoidTriggerState.count>=2){
+      avoidState={active:false,goal:null,causeId:movingHit.id||null,mode:'wait',startT:scene.t};
+      trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;
+      planStatus='avoiding';
+    }
+  }else if(!movingHit&&avoidState.mode==='none'){
+    avoidTriggerState={id:null,count:0};
+  }
+
+  if(avoidState.mode==='wait'){
+    scene.ego.v=0;
+    const waitT=scene.t-avoidState.startT;
+    if(!movingHit){
+      resetAvoidState();
+      trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='planning';
+    }else if((blockedByMoving&&waitT>=1.2)||waitT>=3.5){
+      const avoidGoal=buildAvoidGoal(scene.ego,movingHit,scene.slot.goal,planningObstacles,vp);
+      if(avoidGoal){
+        avoidState={active:true,goal:avoidGoal,causeId:movingHit.id||null,mode:'avoid',startT:scene.t};
+        trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='avoiding';
+      }else{
+        const revGoal=buildReverseYieldGoal(scene.ego,vp,planningObstacles);
+        if(revGoal){
+          avoidState={active:true,goal:revGoal,causeId:movingHit.id||null,mode:'reverse',startT:scene.t};
+          trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='avoiding';
         }
       }
-    }else{
-      avoidTriggerState={id:null,count:0};
     }
+    advanceSceneOnly(dt);
+    updateMetrics();
+    return;
   }
 
   if(avoidState.active&&isAvoidGoalReached(scene.ego,avoidState.goal)){
-    avoidState={active:false,goal:null,causeId:null};
-    avoidTriggerState={id:null,count:0};
+    resetAvoidState();
     trajectory=null;
     trajectoryIndex=1;
     stepsSincePlan=cfg.replanEvery;
@@ -991,7 +1039,7 @@ async function stepOnce(){
     stepsSincePlan=cfg.replanEvery;
   }
 
-  if(!avoidState.active&&shouldRunFinalAlign(scene.ego,scene.slot,vp)){
+  if(!avoidState.active&&avoidState.mode==='none'&&shouldRunFinalAlign(scene.ego,scene.slot,vp)){
     if(planStatus!=='aligning'||alignState.steps===0)alignState.startT=scene.t;
     planStatus='aligning';
     const ok=runFinalAlignStep(scene.ego,scene.slot,vp,planningObstacles);
@@ -1031,7 +1079,9 @@ async function stepOnce(){
     document.getElementById('mGd').textContent=(GPU.ready?'GPU ':'CPU ')+GPU.ms.toFixed(1)+'ms';
     const t1=performance.now();
     const result=avoidState.active
-      ?planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(8,cfg.planner.maxTime),wRev:Math.max(18,cfg.planner.wRev*3.5),wGear:Math.max(12,cfg.planner.wGear*1.5),goalPosTol:Math.min(0.5,cfg.planner.goalPosTol),goalYawTol:Math.min(20,cfg.planner.goalYawTol)})
+      ?(avoidState.mode==='reverse'
+        ?planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(6,cfg.planner.maxTime),wRev:Math.min(0.8,cfg.planner.wRev*0.4),wGear:Math.max(9,cfg.planner.wGear*1.1),goalPosTol:Math.min(0.45,cfg.planner.goalPosTol),goalYawTol:Math.min(16,cfg.planner.goalYawTol)})
+        :planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(8,cfg.planner.maxTime),wRev:Math.max(18,cfg.planner.wRev*3.5),wGear:Math.max(12,cfg.planner.wGear*1.5),goalPosTol:Math.min(0.5,cfg.planner.goalPosTol),goalYawTol:Math.min(20,cfg.planner.goalYawTol)}))
       :planShortestParkingPath(scene.ego,vp,cfg.planner);
     lastPlanMs=performance.now()-t1;
     trajectory=result?result.path:null;
@@ -1628,7 +1678,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
 
 function resetSim(){
   running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;resetAlignState();totalDist=0;gearSwitches=0;lastPlanMs=0;
-  avoidState={active:false,goal:null,causeId:null};
+  avoidState={active:false,goal:null,causeId:null,mode:'none',startT:0};
   avoidTriggerState={id:null,count:0};
   movingObsTracks.clear();
   avoidRangeLatch.clear();
