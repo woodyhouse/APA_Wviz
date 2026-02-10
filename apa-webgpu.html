@@ -72,7 +72,8 @@ backdrop-filter:blur(8px);font-size:9px;line-height:1.8}
 font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
 background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
 #SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
-#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}
+#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}#SB.aligning{color:var(--wn);border-color:var(--wn)}
+#SB.emergency{color:var(--er);border-color:var(--er);box-shadow:0 0 10px rgba(239,68,68,.25)}
 #PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
 padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
 backdrop-filter:blur(8px);display:none;line-height:1.7}
@@ -97,7 +98,7 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
    <div class="P"><label>LiDAR距离</label><input id="iLR" type="number" value="25"><span class="U">m</span></div>
    <div class="P"><label>LiDAR FOV</label><input id="iLF" type="number" value="180"><span class="U">°</span></div>
    <div class="P"><label>USS距离</label><input id="iUR" type="number" step="0.5" value="5"><span class="U">m</span></div>
-   <div class="P"><label>重规划</label><input id="iRP" type="number" value="3"><span class="U">步</span></div>
+   <div class="P"><label>重规划</label><input id="iRP" type="number" value="1"><span class="U">步</span></div>
    <div class="TG"><label>显示USS扇区</label><div id="tUSS" class="tg on"></div></div>
   </div></div>
   <div class="S"><div class="ST">车辆</div><div class="C">
@@ -171,7 +172,7 @@ const GPU={device:null,ready:false,pipeline:null,bgl:null,MAX_OBS:48,
 
 const WGSL=`
 struct P{xMin:f32,yMin:f32,step:f32,nX:u32,nY:u32,nYaw:u32,eL:f32,eW:f32,inf:f32,nObs:u32,_0:f32,_1:f32};
-struct O{kind:f32,x:f32,y:f32,yaw:f32,w:f32,h:f32,r:f32,_:f32};
+struct O{kind:f32,x:f32,y:f32,yaw:f32,w:f32,h:f32,r:f32,pad:f32};
 @group(0)@binding(0) var<uniform> p:P;
 @group(0)@binding(1) var<storage,read> obs:array<O>;
 @group(0)@binding(2) var<storage,read_write> g:array<u32>;
@@ -227,17 +228,17 @@ async function initGPU(){
   const el=document.getElementById('GS'),lb=document.getElementById('GL'),dt=document.getElementById('GD');
   dt.textContent=`${(GPU.total/1000)|0}K cells`;
   document.getElementById('mGd').textContent='—';
-  if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';return;}
+  if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';document.getElementById('mGd').textContent='CPU';return;}
   try{
-    GPU.adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
-    if(!GPU.adapter){lb.textContent='无GPU适配器';return;}
+    GPU.adapter=await navigator.gpu.requestAdapter();
+    if(!GPU.adapter){lb.textContent='无GPU适配器 (CPU回退)';document.getElementById('mGd').textContent='CPU';return;}
     GPU.device=await GPU.adapter.requestDevice();
     const md=GPU.device.createShaderModule({code:WGSL});
     GPU.bgl=GPU.device.createBindGroupLayout({entries:[
       {binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'uniform'}},
       {binding:1,visibility:GPUShaderStage.COMPUTE,buffer:{type:'read-only-storage'}},
       {binding:2,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage'}}]});
-    GPU.pipeline=GPU.device.createComputePipeline({
+    GPU.pipeline=await GPU.device.createComputePipelineAsync({
       layout:GPU.device.createPipelineLayout({bindGroupLayouts:[GPU.bgl]}),
       compute:{module:md,entryPoint:'main'}});
     GPU.pBuf=GPU.device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
@@ -245,39 +246,50 @@ async function initGPU(){
     GPU.outB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC});
     GPU.rdB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
     GPU.ready=true;
-    const info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
+    let info={};
+    if(typeof GPU.adapter.requestAdapterInfo==='function')info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
     el.className='on';lb.textContent=info.description||'WebGPU 已激活';
-    dt.textContent=`${(GPU.total/1000)|0}K · 4090`;
-  }catch(e){console.warn(e);lb.textContent='GPU初始化失败';}
+    dt.textContent=`${(GPU.total/1000)|0}K`;
+    document.getElementById('mGd').textContent='GPU';
+  }catch(e){console.warn(e);GPU.ready=false;el.className='off';lb.textContent='GPU初始化失败 (CPU回退)';document.getElementById('mGd').textContent='CPU';}
 }
 
 async function computeGrid(obs,vp){
   const t0=performance.now();
   if(GPU.ready){
-    const n=Math.min(obs.length,GPU.MAX_OBS);
-    const pm=new Float32Array(12);
-    pm[0]=GPU.xMin;pm[1]=GPU.yMin;pm[2]=GPU.step;
-    const dv=new DataView(pm.buffer);
-    dv.setUint32(12,GPU.nX,true);dv.setUint32(16,GPU.nY,true);dv.setUint32(20,GPU.nYaw,true);
-    pm[6]=vp.length;pm[7]=vp.width;pm[8]=vp.inflation;dv.setUint32(36,n,true);
-    GPU.device.queue.writeBuffer(GPU.pBuf,0,pm);
-    const od=new Float32Array(GPU.MAX_OBS*8);
-    for(let i=0;i<n;i++){const o=obs[i],j=i*8;
-      od[j]=o.shape==='circle'?1:0;od[j+1]=o.x;od[j+2]=o.y;od[j+3]=o.yaw||0;
-      od[j+4]=o.w||0;od[j+5]=o.h||0;od[j+6]=o.r||0;}
-    GPU.device.queue.writeBuffer(GPU.oBuf,0,od);
-    const bg=GPU.device.createBindGroup({layout:GPU.bgl,entries:[
-      {binding:0,resource:{buffer:GPU.pBuf}},{binding:1,resource:{buffer:GPU.oBuf}},
-      {binding:2,resource:{buffer:GPU.outB}}]});
-    const enc=GPU.device.createCommandEncoder();
-    const ps=enc.beginComputePass();ps.setPipeline(GPU.pipeline);ps.setBindGroup(0,bg);
-    ps.dispatchWorkgroups(Math.ceil(GPU.total/256));ps.end();
-    enc.copyBufferToBuffer(GPU.outB,0,GPU.rdB,0,GPU.total*4);
-    GPU.device.queue.submit([enc.finish()]);
-    await GPU.rdB.mapAsync(GPUMapMode.READ);
-    GPU.grid=new Uint32Array(GPU.rdB.getMappedRange().slice(0));
-    GPU.rdB.unmap();
-  }else{
+    try{
+      const n=Math.min(obs.length,GPU.MAX_OBS);
+      const pm=new Float32Array(12);
+      pm[0]=GPU.xMin;pm[1]=GPU.yMin;pm[2]=GPU.step;
+      const dv=new DataView(pm.buffer);
+      dv.setUint32(12,GPU.nX,true);dv.setUint32(16,GPU.nY,true);dv.setUint32(20,GPU.nYaw,true);
+      pm[6]=vp.length;pm[7]=vp.width;pm[8]=vp.inflation;dv.setUint32(36,n,true);
+      GPU.device.queue.writeBuffer(GPU.pBuf,0,pm);
+      const od=new Float32Array(GPU.MAX_OBS*8);
+      for(let i=0;i<n;i++){const o=obs[i],j=i*8;
+        od[j]=o.shape==='circle'?1:0;od[j+1]=o.x;od[j+2]=o.y;od[j+3]=o.yaw||0;
+        od[j+4]=o.w||0;od[j+5]=o.h||0;od[j+6]=o.r||0;}
+      GPU.device.queue.writeBuffer(GPU.oBuf,0,od);
+      const bg=GPU.device.createBindGroup({layout:GPU.bgl,entries:[
+        {binding:0,resource:{buffer:GPU.pBuf}},{binding:1,resource:{buffer:GPU.oBuf}},
+        {binding:2,resource:{buffer:GPU.outB}}]});
+      const enc=GPU.device.createCommandEncoder();
+      const ps=enc.beginComputePass();ps.setPipeline(GPU.pipeline);ps.setBindGroup(0,bg);
+      ps.dispatchWorkgroups(Math.ceil(GPU.total/256));ps.end();
+      enc.copyBufferToBuffer(GPU.outB,0,GPU.rdB,0,GPU.total*4);
+      GPU.device.queue.submit([enc.finish()]);
+      await GPU.rdB.mapAsync(GPUMapMode.READ);
+      GPU.grid=new Uint32Array(GPU.rdB.getMappedRange().slice(0));
+      GPU.rdB.unmap();
+    }catch(e){
+      console.warn('WebGPU compute failed, fallback to CPU',e);
+      GPU.ready=false;
+      document.getElementById('GL').textContent='WebGPU计算失败 (CPU回退)';
+      document.getElementById('mGd').textContent='CPU';
+    }
+  }
+
+  if(!GPU.ready){
     // CPU fallback
     const eHW=(vp.length+2*vp.inflation)/2,eHH=(vp.width+2*vp.inflation)/2;
     for(let idx=0;idx<GPU.total;idx++){
@@ -490,6 +502,20 @@ function pointToSegDist(p,a,b){
   let t=((p.x-a.x)*dx+(p.y-a.y)*dy)/len2;
   t=clamp(t,0,1);
   return hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy));
+}
+
+function pointInPoly(pt,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const yi=poly[i].y,yj=poly[j].y,xi=poly[i].x,xj=poly[j].x;
+    if((yi>pt.y)!==(yj>pt.y)&&pt.x<(xj-xi)*(pt.y-yi)/(yj-yi)+xi)inside=!inside;
+  }
+  return inside;
+}
+
+function getPlanningObstacles(){
+  const poly=scene.slot.poly;
+  return scene.obstacles.filter(ob=>!pointInPoly({x:ob.x,y:ob.y},poly));
 }
 
 // ═══════════ HYBRID A* (GPU ACCELERATED) ═══════════
@@ -723,12 +749,12 @@ const cfg={
   vehicle:{length:4.6,width:1.9,wheelbase:2.75,frontOverhang:0.95,rearOverhang:0.90,
     maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2},
   planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15},
-  replanEvery:3};
+  replanEvery:1};
 function syncCfg(){
   cfg.sensor.lidarRange=+document.getElementById('iLR').value||25;
   cfg.sensor.lidarFov=+document.getElementById('iLF').value||180;
   cfg.sensor.ussRange=+document.getElementById('iUR').value||5;
-  cfg.replanEvery=+document.getElementById('iRP').value||3;
+  cfg.replanEvery=Math.max(1,+document.getElementById('iRP').value||3);
   cfg.vehicle.length=+document.getElementById('iVL').value||4.6;
   cfg.vehicle.width=+document.getElementById('iVW').value||1.9;
   cfg.vehicle.wheelbase=+document.getElementById('iWB').value||2.75;
@@ -744,47 +770,174 @@ function syncCfg(){
 document.querySelectorAll('#pn input').forEach(el=>el.addEventListener('input',syncCfg));syncCfg();
 
 // ═══════════ SCENE ═══════════
+function getSlotSize(type,vp=cfg.vehicle){
+  const longMargin=type==='parallel'?1.4:1.1;
+  const latMargin=0.9;
+  return{len:vp.length+longMargin,wid:vp.width+latMargin};
+}
+
+function makeSlot(goal,type='parallel'){
+  const d=getSlotSize(type,cfg.vehicle),hl=d.len/2,hw=d.wid/2;
+  const c=Math.cos(goal.yaw),sg=Math.sin(goal.yaw);
+  const poly=[
+    {x:goal.x+c*hl-sg*hw,y:goal.y+sg*hl+c*hw},
+    {x:goal.x+c*hl+sg*hw,y:goal.y+sg*hl-c*hw},
+    {x:goal.x-c*hl+sg*hw,y:goal.y-sg*hl-c*hw},
+    {x:goal.x-c*hl-sg*hw,y:goal.y-sg*hl+c*hw},
+  ];
+  return{poly,goal:{...goal},type};
+}
+
 function mkScene(){return{t:0,stepN:0,
   ego:{x:2,y:4,yaw:0,v:0,gear:1},
-  slot:{poly:[{x:7.5,y:2.2},{x:14,y:2.2},{x:14,y:-0.2},{x:7.5,y:-0.2}],goal:{x:10.75,y:1.0,yaw:0},type:'parallel'},
+  slot:makeSlot({x:10.75,y:1.0,yaw:0},'parallel'),
   obstacles:[
     {id:uid(),shape:'rect',x:5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
     {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
     {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
     {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
-let scene=mkScene(),running=false,trajectory=null,perceivedObs=[];
+let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[],planningObstacles=[];
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
 
 // ═══════════ SIMULATION STEP ═══════════
-let planning=false;
+let planning=false,emergencyHold=false;
+let alignState={lastGear:1,stuck:0,lastErr:Infinity,steps:0,settle:0};
+let policyBandit={policies:[],active:null,episode:null};
+
+function initPolicyBandit(){
+  if(policyBandit.policies.length)return;
+  const base={vPlan:cfg.planner.vPlan,wRev:cfg.planner.wRev,wGear:cfg.planner.wGear,wSteer:cfg.planner.wSteer,goalPosTol:cfg.planner.goalPosTol,goalYawTol:cfg.planner.goalYawTol};
+  const vars=[
+    {name:'base',mul:{vPlan:1,wRev:1,wGear:1,wSteer:1,gPos:1,gYaw:1}},
+    {name:'fast',mul:{vPlan:1.15,wRev:0.9,wGear:0.9,wSteer:1,gPos:0.95,gYaw:0.92}},
+    {name:'smooth',mul:{vPlan:0.9,wRev:1.1,wGear:1.2,wSteer:0.9,gPos:1.05,gYaw:1.08}},
+    {name:'tight',mul:{vPlan:0.95,wRev:1.0,wGear:1.05,wSteer:1.2,gPos:0.78,gYaw:0.75}},
+  ];
+  policyBandit.policies=vars.map((v,i)=>({
+    id:i,name:v.name,
+    planner:{
+      vPlan:base.vPlan*v.mul.vPlan,wRev:base.wRev*v.mul.wRev,wGear:base.wGear*v.mul.wGear,wSteer:base.wSteer*v.mul.wSteer,
+      goalPosTol:base.goalPosTol*v.mul.gPos,goalYawTol:base.goalYawTol*v.mul.gYaw,maxTime:cfg.planner.maxTime,resXY:cfg.planner.resXY,resYaw:cfg.planner.resYaw,
+    },
+    n:0,reward:0,best:Infinity
+  }));
+
+  try{
+    const saved=JSON.parse(localStorage.getItem('apaPolicyBandit')||'null');
+    if(saved&&Array.isArray(saved)&&saved.length===policyBandit.policies.length){
+      for(let i=0;i<saved.length;i++){
+        policyBandit.policies[i].n=saved[i].n||0;
+        policyBandit.policies[i].reward=saved[i].reward||0;
+        policyBandit.policies[i].best=saved[i].best||Infinity;
+      }
+    }
+  }catch(_){ }
+}
+
+function selectPolicyForEpisode(){
+  initPolicyBandit();
+  const total=Math.max(1,policyBandit.policies.reduce((s,p)=>s+p.n,0));
+  let pick=policyBandit.policies[0],best=-1e9;
+  for(const p of policyBandit.policies){
+    const mean=p.n?p.reward/p.n:0;
+    const bonus=p.n?Math.sqrt(2*Math.log(total+1)/p.n):2.2;
+    const ucb=mean+bonus;
+    if(ucb>best){best=ucb;pick=p;}
+  }
+  policyBandit.active=pick;
+  Object.assign(cfg.planner,pick.planner);
+  policyBandit.episode={t0:scene.t,d0:totalDist,g0:gearSwitches,updated:false};
+}
+
+function updatePolicyReward(success){
+  const ep=policyBandit.episode,p=policyBandit.active;
+  if(!ep||!p||ep.updated)return;
+  const dt=Math.max(0.1,scene.t-ep.t0),dd=Math.max(0,totalDist-ep.d0),dg=Math.max(0,gearSwitches-ep.g0);
+  const pv=lastParkVal||validateParking(scene.ego,scene.slot,cfg.vehicle);
+  const fitness=dt+0.8*dd+1.5*dg+0.12*(100-(pv.score||0))+(success?0:25);
+  const reward=1/(1+fitness);
+  p.n++;p.reward+=reward;p.best=Math.min(p.best,fitness);
+  ep.updated=true;
+  try{localStorage.setItem('apaPolicyBandit',JSON.stringify(policyBandit.policies.map(x=>({n:x.n,reward:x.reward,best:x.best}))));}catch(_){ }
+}
+
 async function stepOnce(){
   if(planning)return;syncCfg();
   const vp=cfg.vehicle,dt=vp.dt,goal=scene.slot.goal;
 
   // Check if parked - use strict validation
   const parkVal=validateParking(scene.ego,scene.slot,vp);
-  if(hypot(scene.ego.x-goal.x,scene.ego.y-goal.y)<0.8&&parkVal.pass){
+  if(isStrictAligned(scene.ego,scene.slot,vp)){
     planStatus='success';running=false;lastParkVal=parkVal;
+    updatePolicyReward(true);
     document.getElementById('btnPlay').textContent='▶ 开始';
+    document.getElementById('btnPlay').classList.remove('running');
     showParkScore(parkVal);updateMetrics();return;
   }
 
   perceivedObs=getPerceivedObs();
+  planningObstacles=getPlanningObstacles();
+
+  if(hasImmediateCollision(scene.ego,vp,planningObstacles)){
+    engageEmergencyStop();
+    updateMetrics();
+    return;
+  }
+
+  if(emergencyHold){
+    emergencyHold=false;
+    planStatus='planning';
+    stepsSincePlan=cfg.replanEvery;
+  }
+
+  if(shouldRunFinalAlign(scene.ego,scene.slot,vp)){
+    planStatus='aligning';
+    const ok=runFinalAlignStep(scene.ego,scene.slot,vp,planningObstacles);
+    scene.t+=dt;scene.stepN++;simStepCount++;
+    lastParkVal=validateParking(scene.ego,scene.slot,vp);
+    if(ok&&(isStrictAligned(scene.ego,scene.slot,vp)||isCenteredEnoughToStop(scene.ego,scene.slot,vp))){
+      planStatus='success';running=false;
+      updatePolicyReward(true);
+      document.getElementById('btnPlay').textContent='▶ 开始';
+      document.getElementById('btnPlay').classList.remove('running');
+      showParkScore(lastParkVal);
+    }else if(alignState.steps>90&&alignState.settle>14){
+      // avoid endless nudging: hand back to global planner for a fresh approach
+      trajectory=null;stepsSincePlan=cfg.replanEvery;planStatus='planning';
+      alignState.steps=0;alignState.settle=0;
+    }
+    updateMetrics();
+    return;
+  }
+
   stepsSincePlan++;
-  if(!trajectory||stepsSincePlan>=cfg.replanEvery){
+  const pathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
+    ?isPathBlockedSoon(trajectory,trajectoryIndex,planningObstacles,vp)
+    :false;
+  if(!trajectory||stepsSincePlan>=cfg.replanEvery||pathBlockedSoon){
     planning=true;
-    await computeGrid(perceivedObs,vp);
-    document.getElementById('mGd').textContent=GPU.ms.toFixed(1)+'ms';
+    await computeGrid(planningObstacles,vp);
+    document.getElementById('mGd').textContent=(GPU.ready?'GPU ':'CPU ')+GPU.ms.toFixed(1)+'ms';
     const t1=performance.now();
     const result=planHybridAStar(scene.ego,goal,vp,cfg.planner);
     lastPlanMs=performance.now()-t1;
     trajectory=result?result.path:null;
+    trajectoryIndex=1;
     stepsSincePlan=0;planning=false;
     planStatus=trajectory?'planning':'nopath';
+    if(!trajectory&&policyBandit.episode&&!policyBandit.episode.updated&&scene.t-policyBandit.episode.t0>cfg.planner.maxTime*0.6){updatePolicyReward(false);} 
   }
   if(trajectory&&trajectory.length>=2){
-    const nxt=trajectory[1],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+    trajectoryIndex=pickTrackingIndex(trajectory,trajectoryIndex,scene.ego,vp);
+    const nxt=trajectory[Math.min(trajectoryIndex,trajectory.length-1)],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+
+    if(willCollideOnNextStep(scene.ego,nxt,vp,planningObstacles)){
+      engageEmergencyStop();
+      updateMetrics();
+      return;
+    }
+
     scene.ego.gear=nxt.gear;
     const st=bicStep(scene.ego,nxt.st,nxt.a,vp);
     scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
@@ -795,7 +948,168 @@ async function stepOnce(){
   scene.t+=dt;scene.stepN++;simStepCount++;
   // Live parking validation
   lastParkVal=validateParking(scene.ego,scene.slot,vp);
+  if(policyBandit.episode&&!policyBandit.episode.updated&&scene.t-policyBandit.episode.t0>cfg.planner.maxTime*1.4){
+    planStatus='nopath';running=false;updatePolicyReward(false);
+    document.getElementById('btnPlay').textContent='▶ 开始';
+    document.getElementById('btnPlay').classList.remove('running');
+  }
   updateMetrics();
+}
+
+function pickTrackingIndex(path,startIdx,ego,vp){
+  if(!path||path.length<2)return 1;
+  let idx=clamp(startIdx||1,1,path.length-1);
+  const catchDist=Math.max(0.3,vp.maxV*vp.dt*0.9);
+  while(idx<path.length-1&&hypot(path[idx].x-ego.x,path[idx].y-ego.y)<catchDist)idx++;
+  return idx;
+}
+
+function isPathBlockedSoon(path,startIdx,obs,vp){
+  if(!path||!obs||!obs.length)return false;
+  const from=clamp(startIdx||1,1,path.length-1);
+  const to=Math.min(path.length-1,from+12);
+  for(let i=from;i<=to;i++){
+    const tPred=(i-from+1)*vp.dt;
+    for(const ob of obs){
+      const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+      if(egoCol(path[i],vp,pob))return true;
+    }
+  }
+  return false;
+}
+
+function hasImmediateCollision(ego,vp,obs){
+  for(const ob of obs){if(egoCol(ego,vp,ob))return true;}
+  return false;
+}
+
+function willCollideOnNextStep(ego,nxt,vp,obs){
+  const probe={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear:nxt.gear};
+  const st=bicStep(probe,nxt.st,nxt.a,vp);
+  const tPred=vp.dt;
+  for(const ob of obs){
+    const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+    if(egoCol(st,vp,pob))return true;
+  }
+  return false;
+}
+
+function engageEmergencyStop(){
+  emergencyHold=true;
+  trajectory=null;
+  trajectoryIndex=1;
+  stepsSincePlan=cfg.replanEvery;
+  scene.ego.v=0;
+  planStatus='emergency';
+}
+
+
+function poseErrorInGoalFrame(ego,goal){
+  const c=Math.cos(goal.yaw),sg=Math.sin(goal.yaw);
+  const dx=ego.x-goal.x,dy=ego.y-goal.y;
+  return{longErr:c*dx+sg*dy,latErr:-sg*dx+c*dy,yawErr:wrapPi(ego.yaw-goal.yaw)};
+}
+
+function shouldRunFinalAlign(ego,slot,vp){
+  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const nearGoal=Math.hypot(ego.x-slot.goal.x,ego.y-slot.goal.y)<1.5;
+  const centerInside=pointInPoly({x:ego.x,y:ego.y},slot.poly);
+  const roughAligned=Math.abs(e.latErr)<0.7&&Math.abs(rad2deg(e.yawErr))<28;
+  return nearGoal&&centerInside&&roughAligned;
+}
+
+function isStrictAligned(ego,slot,vp){
+  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const pv=validateParking(ego,slot,vp);
+  return pv.pass&&Math.abs(rad2deg(e.yawErr))<=0.8&&Math.abs(e.latErr)<=0.05&&Math.abs(e.longErr)<=0.08&&pv.minLineGap>=0.04;
+}
+
+function isCenteredEnoughToStop(ego,slot,vp){
+  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const pv=validateParking(ego,slot,vp);
+  return pv.pass&&Math.abs(rad2deg(e.yawErr))<=1.0&&Math.abs(e.latErr)<=0.06&&Math.abs(e.longErr)<=0.10&&Math.abs(ego.v)<=0.08;
+}
+
+function runFinalAlignStep(ego,slot,vp,obs){
+  alignState.steps++;
+  const e0=poseErrorInGoalFrame(ego,slot.goal);
+  const yawAbs=Math.abs(e0.yawErr),longAbs=Math.abs(e0.longErr);
+
+  // prioritize heading + centerline; reduce pointless fore/aft twitching near center
+  let desiredSteer=clamp(-(3.4*e0.yawErr+2.1*e0.latErr),-vp.maxSteer*0.95,vp.maxSteer*0.95);
+  if(yawAbs>deg2rad(4.5)){
+    const minTurn=vp.maxSteer*0.32;
+    if(Math.abs(desiredSteer)<minTurn)desiredSteer=Math.sign(desiredSteer||e0.yawErr||1)*minTurn;
+  }
+
+  const longDeadband=0.09;
+  const gearPref=longAbs>longDeadband?(e0.longErr>0?-1:1):alignState.lastGear;
+  const gearSet=[gearPref,-gearPref];
+  const speedSet=[0.12,0.20,0.28];
+  const steerSet=[
+    clamp(desiredSteer*1.2,-vp.maxSteer,vp.maxSteer),
+    desiredSteer,
+    clamp(desiredSteer*0.8,-vp.maxSteer,vp.maxSteer),
+    clamp(desiredSteer+vp.maxSteer*0.18,-vp.maxSteer,vp.maxSteer),
+    clamp(desiredSteer-vp.maxSteer*0.18,-vp.maxSteer,vp.maxSteer),
+    0,
+  ];
+
+  let best=null;
+  for(const gear of gearSet){
+    for(const sp of speedSet){
+      for(const steer of steerSet){
+        let st={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear};
+        const a=clamp((gear*sp-ego.v)/vp.dt,-vp.maxA,vp.maxA);
+        let hit=false;
+        for(let k=0;k<3;k++){
+          st=bicStep(st,steer,a,vp);
+          const tPred=(k+1)*vp.dt;
+          for(const ob of obs){
+            const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+            if(egoCol(st,vp,pob)){hit=true;break;}
+          }
+          if(hit)break;
+        }
+        if(hit)continue;
+
+        const ne=poseErrorInGoalFrame(st,slot.goal);
+        const corners=getEgoCorners(st,vp);
+        let minGap=Infinity;
+        for(const c of corners)minGap=Math.min(minGap,pointToPolyDist(c,slot.poly));
+        const outPenalty=minGap< -0.14 ? Math.abs(minGap)*18 : 0;
+        const switchPenalty=gear!==alignState.lastGear?0.42:0;
+        const steerPenalty=0.08*Math.abs(steer-desiredSteer)+0.03*Math.abs(steer);
+        const progress=(Math.abs(e0.yawErr)+1.25*Math.abs(e0.latErr)+1.35*Math.abs(e0.longErr))-(Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr));
+        const cost=4.1*Math.abs(ne.yawErr)+3.3*Math.abs(ne.latErr)+2.4*Math.abs(ne.longErr)+switchPenalty+steerPenalty+outPenalty-1.25*progress;
+        if(!best||cost<best.cost)best={st,gear,cost};
+      }
+    }
+  }
+
+  if(!best){
+    alignState.lastGear*=-1;
+    alignState.settle++;
+    ego.v=0;
+    return false;
+  }
+
+  const px=ego.x,py=ego.y;
+  ego.gear=best.gear;ego.x=best.st.x;ego.y=best.st.y;ego.yaw=best.st.yaw;ego.v=best.st.v;
+  totalDist+=hypot(best.st.x-px,best.st.y-py);
+
+  const ne=poseErrorInGoalFrame(ego,slot.goal);
+  const newErr=Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr);
+  if(newErr>alignState.lastErr-8e-4){alignState.stuck++;alignState.settle++;}else{alignState.stuck=0;alignState.settle=Math.max(0,alignState.settle-1);} 
+  alignState.lastErr=newErr;
+  alignState.lastGear=best.gear;
+
+  if(alignState.stuck>7&&Math.abs(ne.longErr)<0.12){
+    // stop early oscillation around center and let success condition capture it
+    ego.v*=0.45;
+    alignState.lastGear*=-1;
+  }
+  return true;
 }
 
 function showParkScore(pv){
@@ -817,10 +1131,10 @@ function updateMetrics(){
   document.getElementById('hudT').textContent=scene.t.toFixed(2);
   document.getElementById('hudS').textContent=scene.stepN;
   const sb=document.getElementById('SB');sb.className=planStatus;
-  const labels={idle:'空闲',planning:'规划中',success:'◈ 泊入',nopath:'无路径'};
+  const labels={idle:'空闲',planning:'规划中',aligning:'姿态调整',success:'◈ 泊入',nopath:'无路径',emergency:'紧急制动'};
   sb.textContent=labels[planStatus]||'—';
   const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'—';
-  ms.className='MV '+(planStatus==='success'?'ok':planStatus==='nopath'?'er':'');
+  ms.className='MV '+(planStatus==='success'?'ok':(planStatus==='nopath'||planStatus==='emergency')?'er':planStatus==='aligning'?'ev':'');
   let col=false;for(const ob of scene.obstacles){if(egoCol(scene.ego,cfg.vehicle,ob)){col=true;break;}}
   const mc=document.getElementById('mCo');mc.textContent=col?'碰撞!':'无';mc.className='MV '+(col?'er':'ok');
   if(lastParkVal)document.getElementById('mPS').textContent=lastParkVal.score.toFixed(0)+'/100';
@@ -1004,7 +1318,8 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
   b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
 
 function resetSim(){
-  running=false;trajectory=null;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
+  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;alignState={lastGear:1,stuck:0,lastErr:Infinity,steps:0,settle:0};totalDist=0;gearSwitches=0;lastPlanMs=0;
+  policyBandit.episode=null;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
   document.getElementById('btnPlay').classList.remove('running');
@@ -1013,6 +1328,7 @@ function resetSim(){
 }
 
 document.getElementById('btnPlay').addEventListener('click',()=>{running=!running;
+  if(running&&scene.stepN===0)selectPolicyForEpisode();
   document.getElementById('btnPlay').textContent=running?'⏸ 暂停':'▶ 开始';
   document.getElementById('btnPlay').classList.toggle('running',running);});
 document.getElementById('btnStep').addEventListener('click',()=>{stepOnce().then(()=>draw());});
@@ -1027,8 +1343,7 @@ document.getElementById('btnP1').addEventListener('click',()=>{
 document.getElementById('btnP2').addEventListener('click',()=>{
   // 垂直泊车
   scene={t:0,stepN:0,ego:{x:-4,y:5,yaw:0,v:0,gear:1},
-    slot:{poly:[{x:5,y:3.2},{x:8,y:3.2},{x:8,y:-1.2},{x:5,y:-1.2}],
-      goal:{x:6.5,y:1.0,yaw:deg2rad(-90)},type:'perpendicular'},
+    slot:makeSlot({x:6.5,y:1.0,yaw:deg2rad(-90)},'perpendicular'),
     obstacles:[
       {id:uid(),shape:'rect',x:3.2,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:9.8,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
@@ -1042,11 +1357,11 @@ document.getElementById('btnP3').addEventListener('click',()=>{
   // 斜向泊车 (60°)
   const ang=deg2rad(60);
   scene={t:0,stepN:0,ego:{x:-3,y:6,yaw:0,v:0,gear:1},
-    slot:{poly:[
-      {x:6,y:3},{x:6+Math.cos(ang)*3,y:3+Math.sin(ang)*3},
-      {x:6+Math.cos(ang)*3-Math.sin(ang)*5,y:3+Math.sin(ang)*3+Math.cos(ang)*5},
-      {x:6-Math.sin(ang)*5,y:3+Math.cos(ang)*5}],
-      goal:{x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,yaw:ang-PI/2},type:'angled'},
+    slot:makeSlot({
+      x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,
+      y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,
+      yaw:ang-PI/2
+    },'angled'),
     obstacles:[
       {id:uid(),shape:'rect',x:4,y:2,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:8.5,y:5,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
@@ -1057,7 +1372,7 @@ document.getElementById('btnP3').addEventListener('click',()=>{
 document.getElementById('btnP4').addEventListener('click',()=>{
   // 压力测试 - 多障碍物、动态
   scene={t:0,stepN:0,ego:{x:-2,y:6,yaw:0,v:0,gear:1},
-    slot:{poly:[{x:7,y:2.5},{x:14,y:2.5},{x:14,y:-0.5},{x:7,y:-0.5}],goal:{x:10.5,y:1.0,yaw:0},type:'parallel'},
+    slot:makeSlot({x:10.5,y:1.0,yaw:0},'parallel'),
     obstacles:[
       {id:uid(),shape:'rect',x:4.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:17,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
@@ -1067,8 +1382,8 @@ document.getElementById('btnP4').addEventListener('click',()=>{
       {id:uid(),shape:'rect',x:0,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'护栏'},
-      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.25,vy:0,kind:'自行车'},
-      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.12,vy:0,kind:'推车'}]};
+      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.65,vy:0,kind:'自行车'},
+      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.35,vy:0,kind:'推车'}]};
   resetSim();
 });
 
@@ -1080,7 +1395,7 @@ document.getElementById('btnEvo').addEventListener('click',()=>{
 document.getElementById('btnApply').addEventListener('click',()=>{
   if(!evoState.best)return;
   const b=evoState.best;
-  if(b.path){trajectory=b.path;planStatus='planning';draw();}
+  if(b.path){trajectory=b.path;trajectoryIndex=1;planStatus='planning';draw();}
   alert(`最优参数已应用:\n规划速度=${b.chrome.vPlan.toFixed(2)}\n倒车权重=${b.chrome.wRev.toFixed(2)}\n换挡权重=${b.chrome.wGear.toFixed(2)}\n评分=${b.parkScore.toFixed(0)}/100\n揉库=${b.gears}次\n距离=${b.dist.toFixed(1)}m`);
 });
 
@@ -1107,7 +1422,7 @@ canvas.addEventListener('pointerdown',e=>{
   if(mode==='rect'){const ob={id:uid(),shape:'rect',x:w.x,y:w.y,yaw:0,w:1.8,h:0.8,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='circle'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.35,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-0.3,vy:0,kind:'行人'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
-  if(mode==='slot'){scene.slot.poly=[{x:w.x-2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y-1.2},{x:w.x-2.75,y:w.y-1.2}];scene.slot.goal={x:w.x,y:w.y,yaw:0};selected={type:'slot'};draw();return;}
+  if(mode==='slot'){scene.slot=makeSlot({x:w.x,y:w.y,yaw:0},'parallel');selected={type:'slot'};draw();return;}
   const hit=pickObj(w.x,w.y);selected=hit;
   if(hit){dragging=true;if(hit.type==='ego')dragOff={x:scene.ego.x-w.x,y:scene.ego.y-w.y};
     else if(hit.type==='ob'){const ob=scene.obstacles.find(o=>o.id===hit.id);if(ob)dragOff={x:ob.x-w.x,y:ob.y-w.y};}
