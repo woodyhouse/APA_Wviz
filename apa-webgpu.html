@@ -526,9 +526,49 @@ function pointInPoly(pt,poly){
   return inside;
 }
 
+
+function segCross(a,b,c,d){
+  function cr(p,q,r){return (q.x-p.x)*(r.y-p.y)-(q.y-p.y)*(r.x-p.x);}
+  const c1=cr(a,b,c),c2=cr(a,b,d),c3=cr(c,d,a),c4=cr(c,d,b);
+  const eps=1e-8;
+  if(Math.abs(c1)<eps&&Math.abs(c2)<eps&&Math.abs(c3)<eps&&Math.abs(c4)<eps){
+    const in1=Math.max(Math.min(a.x,b.x),Math.min(c.x,d.x))<=Math.min(Math.max(a.x,b.x),Math.max(c.x,d.x))+eps;
+    const in2=Math.max(Math.min(a.y,b.y),Math.min(c.y,d.y))<=Math.min(Math.max(a.y,b.y),Math.max(c.y,d.y))+eps;
+    return in1&&in2;
+  }
+  return (c1*c2<=eps)&&(c3*c4<=eps);
+}
+
+function polyIntersectsPoly(pa,pb){
+  for(const p of pa)if(pointInPoly(p,pb))return true;
+  for(const p of pb)if(pointInPoly(p,pa))return true;
+  for(let i=0;i<pa.length;i++){
+    const a0=pa[i],a1=pa[(i+1)%pa.length];
+    for(let j=0;j<pb.length;j++){
+      const b0=pb[j],b1=pb[(j+1)%pb.length];
+      if(segCross(a0,a1,b0,b1))return true;
+    }
+  }
+  return false;
+}
+
+function obstacleIntersectsSlot(ob,poly){
+  if(ob.shape==='circle'){
+    const c={x:ob.x,y:ob.y},r=ob.r||0.3;
+    if(pointInPoly(c,poly))return true;
+    for(let i=0;i<poly.length;i++){
+      if(pointToSegDist(c,poly[i],poly[(i+1)%poly.length])<=r)return true;
+    }
+    for(const v of poly)if((v.x-c.x)*(v.x-c.x)+(v.y-c.y)*(v.y-c.y)<=r*r)return true;
+    return false;
+  }
+  const rc=getRectCorners(ob.x,ob.y,ob.yaw||0,ob.w||1,ob.h||1);
+  return polyIntersectsPoly(rc,poly);
+}
+
 function getPlanningObstacles(){
   const poly=scene.slot.poly;
-  return scene.obstacles.filter(ob=>!pointInPoly({x:ob.x,y:ob.y},poly));
+  return scene.obstacles.filter(ob=>!obstacleIntersectsSlot(ob,poly));
 }
 
 // ═══════════ HYBRID A* (GPU ACCELERATED) ═══════════
@@ -961,7 +1001,7 @@ function advanceSceneOnly(dt){
 }
 
 async function stepOnce(){
-  if(planning)return;syncCfg();
+  if(planning)return;
   const vp=cfg.vehicle,dt=vp.dt;
 
   // Check if parked - use strict validation
@@ -1014,6 +1054,11 @@ async function stepOnce(){
         }
       }
     }
+    if(avoidState.mode==='wait'&&waitT>=6.0&&!avoidState.active){
+      planStatus='nopath';running=false;
+      document.getElementById('btnPlay').textContent='▶ 开始';
+      document.getElementById('btnPlay').classList.remove('running');
+    }
     advanceSceneOnly(dt);
     updateMetrics();
     return;
@@ -1025,6 +1070,12 @@ async function stepOnce(){
     trajectoryIndex=1;
     stepsSincePlan=cfg.replanEvery;
     planStatus='planning';
+  }
+  if(avoidState.active&&scene.t-avoidState.startT>8.0){
+    resetAvoidState();
+    planStatus='nopath';running=false;
+    document.getElementById('btnPlay').textContent='▶ 开始';
+    document.getElementById('btnPlay').classList.remove('running');
   }
 
   if(hasImmediateCollision(scene.ego,vp,planningObstacles)){
