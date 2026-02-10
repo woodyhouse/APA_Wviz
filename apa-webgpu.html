@@ -72,7 +72,7 @@ backdrop-filter:blur(8px);font-size:9px;line-height:1.8}
 font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
 background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
 #SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
-#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}
+#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}#SB.aligning{color:var(--wn);border-color:var(--wn)}
 #SB.emergency{color:var(--er);border-color:var(--er);box-shadow:0 0 10px rgba(239,68,68,.25)}
 #PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
 padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
@@ -790,7 +790,7 @@ async function stepOnce(){
 
   // Check if parked - use strict validation
   const parkVal=validateParking(scene.ego,scene.slot,vp);
-  if(hypot(scene.ego.x-goal.x,scene.ego.y-goal.y)<0.8&&parkVal.pass){
+  if(isStrictAligned(scene.ego,scene.slot,vp)){
     planStatus='success';running=false;lastParkVal=parkVal;
     document.getElementById('btnPlay').textContent='▶ 开始';
     showParkScore(parkVal);updateMetrics();return;
@@ -809,6 +809,20 @@ async function stepOnce(){
     emergencyHold=false;
     planStatus='planning';
     stepsSincePlan=cfg.replanEvery;
+  }
+
+  if(shouldRunFinalAlign(scene.ego,scene.slot,vp)){
+    planStatus='aligning';
+    const ok=runFinalAlignStep(scene.ego,scene.slot,vp,planningObstacles);
+    scene.t+=dt;scene.stepN++;simStepCount++;
+    lastParkVal=validateParking(scene.ego,scene.slot,vp);
+    if(ok&&isStrictAligned(scene.ego,scene.slot,vp)){
+      planStatus='success';running=false;
+      document.getElementById('btnPlay').textContent='▶ 开始';
+      showParkScore(lastParkVal);
+    }
+    updateMetrics();
+    return;
   }
 
   stepsSincePlan++;
@@ -897,6 +911,45 @@ function engageEmergencyStop(){
   planStatus='emergency';
 }
 
+
+function poseErrorInGoalFrame(ego,goal){
+  const c=Math.cos(goal.yaw),sg=Math.sin(goal.yaw);
+  const dx=ego.x-goal.x,dy=ego.y-goal.y;
+  return{longErr:c*dx+sg*dy,latErr:-sg*dx+c*dy,yawErr:wrapPi(ego.yaw-goal.yaw)};
+}
+
+function shouldRunFinalAlign(ego,slot,vp){
+  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const nearGoal=Math.hypot(ego.x-slot.goal.x,ego.y-slot.goal.y)<1.5;
+  const centerInside=pointInPoly({x:ego.x,y:ego.y},slot.poly);
+  const roughAligned=Math.abs(e.latErr)<0.45&&Math.abs(rad2deg(e.yawErr))<18;
+  return nearGoal&&centerInside&&roughAligned;
+}
+
+function isStrictAligned(ego,slot,vp){
+  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const pv=validateParking(ego,slot,vp);
+  return pv.pass&&Math.abs(rad2deg(e.yawErr))<=0.8&&Math.abs(e.latErr)<=0.06&&Math.abs(e.longErr)<=0.12&&pv.minLineGap>=0.03;
+}
+
+function runFinalAlignStep(ego,slot,vp,obs){
+  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const longTol=0.05;
+  const gear=e.longErr>longTol?-1:1;
+  const targetV=gear*clamp(0.22+0.7*Math.abs(e.longErr),0.22,0.55);
+  const steer=clamp(-(1.8*e.yawErr+1.25*e.latErr),-vp.maxSteer*0.65,vp.maxSteer*0.65);
+  const a=clamp((targetV-ego.v)/vp.dt,-vp.maxA,vp.maxA);
+  const probe={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear};
+  const st=bicStep(probe,steer,a,vp);
+  for(const ob of obs){
+    const pob={...ob,x:ob.x+(ob.vx||0)*vp.dt,y:ob.y+(ob.vy||0)*vp.dt};
+    if(egoCol(st,vp,pob)){engageEmergencyStop();return false;}
+  }
+  ego.gear=gear;ego.x=st.x;ego.y=st.y;ego.yaw=st.yaw;ego.v=st.v;
+  totalDist+=hypot(st.x-probe.x,st.y-probe.y);
+  return true;
+}
+
 function showParkScore(pv){
   const el=document.getElementById('PS');
   el.style.display='block';
@@ -916,10 +969,10 @@ function updateMetrics(){
   document.getElementById('hudT').textContent=scene.t.toFixed(2);
   document.getElementById('hudS').textContent=scene.stepN;
   const sb=document.getElementById('SB');sb.className=planStatus;
-  const labels={idle:'空闲',planning:'规划中',success:'◈ 泊入',nopath:'无路径',emergency:'紧急制动'};
+  const labels={idle:'空闲',planning:'规划中',aligning:'姿态调整',success:'◈ 泊入',nopath:'无路径',emergency:'紧急制动'};
   sb.textContent=labels[planStatus]||'—';
   const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'—';
-  ms.className='MV '+(planStatus==='success'?'ok':(planStatus==='nopath'||planStatus==='emergency')?'er':'');
+  ms.className='MV '+(planStatus==='success'?'ok':(planStatus==='nopath'||planStatus==='emergency')?'er':planStatus==='aligning'?'ev':'');
   let col=false;for(const ob of scene.obstacles){if(egoCol(scene.ego,cfg.vehicle,ob)){col=true;break;}}
   const mc=document.getElementById('mCo');mc.textContent=col?'碰撞!':'无';mc.className='MV '+(col?'er':'ok');
   if(lastParkVal)document.getElementById('mPS').textContent=lastParkVal.score.toFixed(0)+'/100';
