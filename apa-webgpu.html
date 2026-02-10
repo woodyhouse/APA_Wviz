@@ -227,10 +227,10 @@ async function initGPU(){
   const el=document.getElementById('GS'),lb=document.getElementById('GL'),dt=document.getElementById('GD');
   dt.textContent=`${(GPU.total/1000)|0}K cells`;
   document.getElementById('mGd').textContent='—';
-  if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';return;}
+  if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';document.getElementById('mGd').textContent='CPU';return;}
   try{
     GPU.adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
-    if(!GPU.adapter){lb.textContent='无GPU适配器';return;}
+    if(!GPU.adapter){lb.textContent='无GPU适配器 (CPU回退)';document.getElementById('mGd').textContent='CPU';return;}
     GPU.device=await GPU.adapter.requestDevice();
     const md=GPU.device.createShaderModule({code:WGSL});
     GPU.bgl=GPU.device.createBindGroupLayout({entries:[
@@ -247,8 +247,9 @@ async function initGPU(){
     GPU.ready=true;
     const info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
     el.className='on';lb.textContent=info.description||'WebGPU 已激活';
-    dt.textContent=`${(GPU.total/1000)|0}K · 4090`;
-  }catch(e){console.warn(e);lb.textContent='GPU初始化失败';}
+    dt.textContent=`${(GPU.total/1000)|0}K`;
+    document.getElementById('mGd').textContent='GPU';
+  }catch(e){console.warn(e);lb.textContent='GPU初始化失败 (CPU回退)';document.getElementById('mGd').textContent='CPU';}
 }
 
 async function computeGrid(obs,vp){
@@ -490,6 +491,20 @@ function pointToSegDist(p,a,b){
   let t=((p.x-a.x)*dx+(p.y-a.y)*dy)/len2;
   t=clamp(t,0,1);
   return hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy));
+}
+
+function pointInPoly(pt,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const yi=poly[i].y,yj=poly[j].y,xi=poly[i].x,xj=poly[j].x;
+    if((yi>pt.y)!==(yj>pt.y)&&pt.x<(xj-xi)*(pt.y-yi)/(yj-yi)+xi)inside=!inside;
+  }
+  return inside;
+}
+
+function getPlanningObstacles(){
+  const poly=scene.slot.poly;
+  return scene.obstacles.filter(ob=>!pointInPoly({x:ob.x,y:ob.y},poly));
 }
 
 // ═══════════ HYBRID A* (GPU ACCELERATED) ═══════════
@@ -752,7 +767,7 @@ function mkScene(){return{t:0,stepN:0,
     {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
     {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
     {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
-let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[];
+let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[],planningObstacles=[];
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
 
@@ -771,14 +786,15 @@ async function stepOnce(){
   }
 
   perceivedObs=getPerceivedObs();
+  planningObstacles=getPlanningObstacles();
   stepsSincePlan++;
   const pathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
-    ?isPathBlockedSoon(trajectory,trajectoryIndex,perceivedObs,vp)
+    ?isPathBlockedSoon(trajectory,trajectoryIndex,planningObstacles,vp)
     :false;
   if(!trajectory||stepsSincePlan>=cfg.replanEvery||pathBlockedSoon){
     planning=true;
-    await computeGrid(perceivedObs,vp);
-    document.getElementById('mGd').textContent=GPU.ms.toFixed(1)+'ms';
+    await computeGrid(planningObstacles,vp);
+    document.getElementById('mGd').textContent=(GPU.ready?'GPU ':'CPU ')+GPU.ms.toFixed(1)+'ms';
     const t1=performance.now();
     const result=planHybridAStar(scene.ego,goal,vp,cfg.planner);
     lastPlanMs=performance.now()-t1;
@@ -1029,7 +1045,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
   b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
 
 function resetSim(){
-  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
+  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
   document.getElementById('btnPlay').classList.remove('running');
@@ -1092,8 +1108,8 @@ document.getElementById('btnP4').addEventListener('click',()=>{
       {id:uid(),shape:'rect',x:0,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'护栏'},
-      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.25,vy:0,kind:'自行车'},
-      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.12,vy:0,kind:'推车'}]};
+      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.65,vy:0,kind:'自行车'},
+      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.35,vy:0,kind:'推车'}]};
   resetSim();
 });
 
