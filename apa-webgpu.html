@@ -571,13 +571,77 @@ function getPlanningObstacles(){
   return scene.obstacles.filter(ob=>!obstacleIntersectsSlot(ob,poly));
 }
 
+
+function cornerRadiusPenalty(steer,vp){
+  if(Math.abs(steer)<1e-4)return 0;
+  const Rc=Math.abs(vp.wheelbase/Math.tan(steer));
+  const corners=[
+    {x: vp.length/2,y: vp.width/2},
+    {x: vp.length/2,y:-vp.width/2},
+    {x:-vp.length/2,y: vp.width/2},
+    {x:-vp.length/2,y:-vp.width/2},
+  ];
+  let minR=Infinity;
+  for(const c of corners){
+    const r=hypot(c.x,Rc-c.y);
+    if(r<minR)minR=r;
+  }
+  return Math.max(0,(3.8-minR));
+}
+
+function slotPoseMetric(ego,slot){
+  const g0=slot.goal;
+  const g1={...g0,yaw:wrapPi(g0.yaw+PI)};
+  const m=(g)=>{
+    const dx=ego.x-g.x,dy=ego.y-g.y,c=Math.cos(g.yaw),sg=Math.sin(g.yaw);
+    const longErr=Math.abs(c*dx+sg*dy),latErr=Math.abs(-sg*dx+c*dy),yawErr=Math.abs(wrapPi(ego.yaw-g.yaw));
+    return 2.8*latErr+2.0*longErr+1.9*yawErr;
+  };
+  return Math.min(m(g0),m(g1));
+}
+
+function forecastShuntMetric(endPose,slot,vp,obs){
+  let st={x:endPose.x,y:endPose.y,yaw:endPose.yaw,v:endPose.v||0,gear:endPose.gear||1};
+  let collided=false;
+  for(let n=0;n<3;n++){
+    const g=slot.goal;
+    const dx=st.x-g.x,dy=st.y-g.y,c=Math.cos(g.yaw),sg=Math.sin(g.yaw);
+    const longErr=c*dx+sg*dy,latErr=-sg*dx+c*dy,yawErr=wrapPi(st.yaw-g.yaw);
+    const gear=Math.abs(longErr)>0.1?(longErr>0?-1:1):(Math.abs(yawErr)>deg2rad(4)?(yawErr>0?-1:1):1);
+    const steer=clamp(-(2.8*yawErr+1.8*latErr),-vp.maxSteer*0.9,vp.maxSteer*0.9);
+    const targetV=0.28*gear;
+    const a=clamp((targetV-st.v)/vp.dt,-vp.maxA,vp.maxA);
+    st.gear=gear;
+    for(let k=0;k<3;k++){
+      st=bicStep(st,steer,a,vp);
+      for(const ob of (obs||[])){
+        const pob={...ob,x:ob.x+(ob.vx||0)*(k+1)*vp.dt,y:ob.y+(ob.vy||0)*(k+1)*vp.dt};
+        if(egoCol(st,vp,pob)){collided=true;break;}
+      }
+      if(collided)break;
+    }
+    if(collided)break;
+  }
+  return {metric:slotPoseMetric(st,slot),collided};
+}
+
+function evaluatePlannedPath(path,slot,vp,obs){
+  if(!path||path.length<2)return {ok:false,score:1e9};
+  const end=path[path.length-1];
+  const term=slotPoseMetric(end,slot);
+  const sh=forecastShuntMetric(end,slot,vp,obs);
+  const score=term+0.85*sh.metric+(sh.collided?8:0);
+  const ok=!sh.collided&&term<=1.55&&sh.metric<=1.35;
+  return {ok,score};
+}
+
 // ═══════════ HYBRID A* (GPU ACCELERATED) ═══════════
 function planHybridAStar(ego0,goal,vp,pc){
   const dt=vp.dt,SUB=3,maxIt=Math.floor(pc.maxTime/dt);
   const rXY=pc.resXY,rYaw=pc.resYaw||36;
   const stSet=[-vp.maxSteer,-0.5*vp.maxSteer,0,0.5*vp.maxSteer,vp.maxSteer];
   const vPA=pc.vPlan||1.5;
-  const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1,W_LANE=pc.wLane||7;
+  const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1,W_LANE=pc.wLane||7,W_CR=pc.wCorner||0.8;
   const laneHardTol=pc.laneHardTol===undefined?Infinity:pc.laneHardTol;
   const goalYawTol=deg2rad(pc.goalYawTol||15),goalPosTol=pc.goalPosTol||0.6;
 
@@ -643,6 +707,7 @@ function planHybridAStar(ego0,goal,vp,pc){
         if(gear!==n.gear)cost+=W_GEAR;
         cost+=W_STEER*Math.abs(steer-n.st);
         cost+=W_LANE*laneOutAmountPose(cu,vp,scene.road)*sl;
+        cost+=W_CR*cornerRadiusPenalty(steer,vp);
         const g2=n.g+cost;
         const old=bestG.get(k2);
         if(old===undefined||g2<old){
@@ -1142,7 +1207,7 @@ async function stepOnce(){
       ?(avoidState.mode==='reverse'
         ?planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(6,cfg.planner.maxTime),wRev:Math.min(0.8,cfg.planner.wRev*0.4),wGear:Math.max(9,cfg.planner.wGear*1.1),goalPosTol:Math.min(0.45,cfg.planner.goalPosTol),goalYawTol:Math.min(16,cfg.planner.goalYawTol),laneHardTol:0.08,wLane:Math.max(20,(cfg.planner.wLane||7)*2.5)})
         :planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(8,cfg.planner.maxTime),wRev:Math.max(18,cfg.planner.wRev*3.5),wGear:Math.max(12,cfg.planner.wGear*1.5),goalPosTol:Math.min(0.5,cfg.planner.goalPosTol),goalYawTol:Math.min(20,cfg.planner.goalYawTol),laneHardTol:0.08,wLane:Math.max(20,(cfg.planner.wLane||7)*2.5)}))
-      :planShortestParkingPath(scene.ego,vp,cfg.planner);
+      :planShortestParkingPath(scene.ego,vp,cfg.planner,planningObstacles);
     lastPlanMs=performance.now()-t1;
     trajectory=result?result.path:null;
     trajectoryIndex=1;
@@ -1386,15 +1451,19 @@ function pathLength(path){
   return d;
 }
 
-function planShortestParkingPath(ego,vp,planner){
+function planShortestParkingPath(ego,vp,planner,obs){
   const baseGoal=scene.slot.goal;
   const goals=[baseGoal,{...baseGoal,yaw:wrapPi(baseGoal.yaw+PI)}];
-  let bestRes=null,bestLen=Infinity;
+  let bestRes=null,bestScore=Infinity;
   for(const g of goals){
-    const res=planHybridAStar(ego,g,vp,planner);
+    const localPc={...planner,goalPosTol:Math.min(0.45,planner.goalPosTol||0.6),goalYawTol:Math.min(8,planner.goalYawTol||15),wCorner:Math.max(0.8,planner.wCorner||0.8)};
+    const res=planHybridAStar(ego,g,vp,localPc);
     if(!res)continue;
     const len=pathLength(res.path);
-    if(len<bestLen){bestLen=len;bestRes=res;}
+    const eva=evaluatePlannedPath(res.path,{...scene.slot,goal:g},vp,obs);
+    if(!eva.ok)continue;
+    const score=len+2.2*eva.score;
+    if(score<bestScore){bestScore=score;bestRes=res;}
   }
   return bestRes;
 }
