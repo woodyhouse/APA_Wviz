@@ -72,7 +72,8 @@ backdrop-filter:blur(8px);font-size:9px;line-height:1.8}
 font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
 background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
 #SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
-#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}\n#SB.emergency{color:var(--er);border-color:var(--er);box-shadow:0 0 10px rgba(239,68,68,.25)}
+#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}
+#SB.emergency{color:var(--er);border-color:var(--er);box-shadow:0 0 10px rgba(239,68,68,.25)}
 #PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
 padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
 backdrop-filter:blur(8px);display:none;line-height:1.7}
@@ -171,7 +172,7 @@ const GPU={device:null,ready:false,pipeline:null,bgl:null,MAX_OBS:48,
 
 const WGSL=`
 struct P{xMin:f32,yMin:f32,step:f32,nX:u32,nY:u32,nYaw:u32,eL:f32,eW:f32,inf:f32,nObs:u32,_0:f32,_1:f32};
-struct O{kind:f32,x:f32,y:f32,yaw:f32,w:f32,h:f32,r:f32,_:f32};
+struct O{kind:f32,x:f32,y:f32,yaw:f32,w:f32,h:f32,r:f32,pad:f32};
 @group(0)@binding(0) var<uniform> p:P;
 @group(0)@binding(1) var<storage,read> obs:array<O>;
 @group(0)@binding(2) var<storage,read_write> g:array<u32>;
@@ -229,7 +230,7 @@ async function initGPU(){
   document.getElementById('mGd').textContent='—';
   if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';document.getElementById('mGd').textContent='CPU';return;}
   try{
-    GPU.adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+    GPU.adapter=await navigator.gpu.requestAdapter();
     if(!GPU.adapter){lb.textContent='无GPU适配器 (CPU回退)';document.getElementById('mGd').textContent='CPU';return;}
     GPU.device=await GPU.adapter.requestDevice();
     const md=GPU.device.createShaderModule({code:WGSL});
@@ -237,7 +238,7 @@ async function initGPU(){
       {binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'uniform'}},
       {binding:1,visibility:GPUShaderStage.COMPUTE,buffer:{type:'read-only-storage'}},
       {binding:2,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage'}}]});
-    GPU.pipeline=GPU.device.createComputePipeline({
+    GPU.pipeline=await GPU.device.createComputePipelineAsync({
       layout:GPU.device.createPipelineLayout({bindGroupLayouts:[GPU.bgl]}),
       compute:{module:md,entryPoint:'main'}});
     GPU.pBuf=GPU.device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
@@ -245,40 +246,50 @@ async function initGPU(){
     GPU.outB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC});
     GPU.rdB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
     GPU.ready=true;
-    const info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
+    let info={};
+    if(typeof GPU.adapter.requestAdapterInfo==='function')info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
     el.className='on';lb.textContent=info.description||'WebGPU 已激活';
     dt.textContent=`${(GPU.total/1000)|0}K`;
     document.getElementById('mGd').textContent='GPU';
-  }catch(e){console.warn(e);lb.textContent='GPU初始化失败 (CPU回退)';document.getElementById('mGd').textContent='CPU';}
+  }catch(e){console.warn(e);GPU.ready=false;el.className='off';lb.textContent='GPU初始化失败 (CPU回退)';document.getElementById('mGd').textContent='CPU';}
 }
 
 async function computeGrid(obs,vp){
   const t0=performance.now();
   if(GPU.ready){
-    const n=Math.min(obs.length,GPU.MAX_OBS);
-    const pm=new Float32Array(12);
-    pm[0]=GPU.xMin;pm[1]=GPU.yMin;pm[2]=GPU.step;
-    const dv=new DataView(pm.buffer);
-    dv.setUint32(12,GPU.nX,true);dv.setUint32(16,GPU.nY,true);dv.setUint32(20,GPU.nYaw,true);
-    pm[6]=vp.length;pm[7]=vp.width;pm[8]=vp.inflation;dv.setUint32(36,n,true);
-    GPU.device.queue.writeBuffer(GPU.pBuf,0,pm);
-    const od=new Float32Array(GPU.MAX_OBS*8);
-    for(let i=0;i<n;i++){const o=obs[i],j=i*8;
-      od[j]=o.shape==='circle'?1:0;od[j+1]=o.x;od[j+2]=o.y;od[j+3]=o.yaw||0;
-      od[j+4]=o.w||0;od[j+5]=o.h||0;od[j+6]=o.r||0;}
-    GPU.device.queue.writeBuffer(GPU.oBuf,0,od);
-    const bg=GPU.device.createBindGroup({layout:GPU.bgl,entries:[
-      {binding:0,resource:{buffer:GPU.pBuf}},{binding:1,resource:{buffer:GPU.oBuf}},
-      {binding:2,resource:{buffer:GPU.outB}}]});
-    const enc=GPU.device.createCommandEncoder();
-    const ps=enc.beginComputePass();ps.setPipeline(GPU.pipeline);ps.setBindGroup(0,bg);
-    ps.dispatchWorkgroups(Math.ceil(GPU.total/256));ps.end();
-    enc.copyBufferToBuffer(GPU.outB,0,GPU.rdB,0,GPU.total*4);
-    GPU.device.queue.submit([enc.finish()]);
-    await GPU.rdB.mapAsync(GPUMapMode.READ);
-    GPU.grid=new Uint32Array(GPU.rdB.getMappedRange().slice(0));
-    GPU.rdB.unmap();
-  }else{
+    try{
+      const n=Math.min(obs.length,GPU.MAX_OBS);
+      const pm=new Float32Array(12);
+      pm[0]=GPU.xMin;pm[1]=GPU.yMin;pm[2]=GPU.step;
+      const dv=new DataView(pm.buffer);
+      dv.setUint32(12,GPU.nX,true);dv.setUint32(16,GPU.nY,true);dv.setUint32(20,GPU.nYaw,true);
+      pm[6]=vp.length;pm[7]=vp.width;pm[8]=vp.inflation;dv.setUint32(36,n,true);
+      GPU.device.queue.writeBuffer(GPU.pBuf,0,pm);
+      const od=new Float32Array(GPU.MAX_OBS*8);
+      for(let i=0;i<n;i++){const o=obs[i],j=i*8;
+        od[j]=o.shape==='circle'?1:0;od[j+1]=o.x;od[j+2]=o.y;od[j+3]=o.yaw||0;
+        od[j+4]=o.w||0;od[j+5]=o.h||0;od[j+6]=o.r||0;}
+      GPU.device.queue.writeBuffer(GPU.oBuf,0,od);
+      const bg=GPU.device.createBindGroup({layout:GPU.bgl,entries:[
+        {binding:0,resource:{buffer:GPU.pBuf}},{binding:1,resource:{buffer:GPU.oBuf}},
+        {binding:2,resource:{buffer:GPU.outB}}]});
+      const enc=GPU.device.createCommandEncoder();
+      const ps=enc.beginComputePass();ps.setPipeline(GPU.pipeline);ps.setBindGroup(0,bg);
+      ps.dispatchWorkgroups(Math.ceil(GPU.total/256));ps.end();
+      enc.copyBufferToBuffer(GPU.outB,0,GPU.rdB,0,GPU.total*4);
+      GPU.device.queue.submit([enc.finish()]);
+      await GPU.rdB.mapAsync(GPUMapMode.READ);
+      GPU.grid=new Uint32Array(GPU.rdB.getMappedRange().slice(0));
+      GPU.rdB.unmap();
+    }catch(e){
+      console.warn('WebGPU compute failed, fallback to CPU',e);
+      GPU.ready=false;
+      document.getElementById('GL').textContent='WebGPU计算失败 (CPU回退)';
+      document.getElementById('mGd').textContent='CPU';
+    }
+  }
+
+  if(!GPU.ready){
     // CPU fallback
     const eHW=(vp.length+2*vp.inflation)/2,eHH=(vp.width+2*vp.inflation)/2;
     for(let idx=0;idx<GPU.total;idx++){
@@ -772,7 +783,7 @@ let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999
 let showCSpace=false,showUSS=true,lastParkVal=null;
 
 // ═══════════ SIMULATION STEP ═══════════
-let planning=false;
+let planning=false,emergencyHold=false;
 async function stepOnce(){
   if(planning)return;syncCfg();
   const vp=cfg.vehicle,dt=vp.dt,goal=scene.slot.goal;
@@ -792,6 +803,12 @@ async function stepOnce(){
     engageEmergencyStop();
     updateMetrics();
     return;
+  }
+
+  if(emergencyHold){
+    emergencyHold=false;
+    planStatus='planning';
+    stepsSincePlan=cfg.replanEvery;
   }
 
   stepsSincePlan++;
@@ -872,13 +889,12 @@ function willCollideOnNextStep(ego,nxt,vp,obs){
 }
 
 function engageEmergencyStop(){
-  running=false;
+  emergencyHold=true;
   trajectory=null;
   trajectoryIndex=1;
+  stepsSincePlan=cfg.replanEvery;
   scene.ego.v=0;
   planStatus='emergency';
-  document.getElementById('btnPlay').textContent='▶ 开始';
-  document.getElementById('btnPlay').classList.remove('running');
 }
 
 function showParkScore(pv){
@@ -1087,7 +1103,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
   b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
 
 function resetSim(){
-  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
+  running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;totalDist=0;gearSwitches=0;lastPlanMs=0;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
   document.getElementById('btnPlay').classList.remove('running');
