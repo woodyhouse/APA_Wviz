@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>APA — WebGPU 加速自动泊车仿真 · 进化优化 · 12USS</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#070a0e;--pn:#0c0f16;--cd:#11151e;--bd:#1a1f2e;--tx:#c0c7d2;--dm:#5c6370;
+--ac:#38bdf8;--a2:#818cf8;--wn:#f59e0b;--er:#ef4444;--ok:#34d399;--gp:#a855f7;--ev:#ec4899}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);
+font-family:'Noto Sans SC',system-ui,sans-serif;font-size:13px}
+#app{display:grid;grid-template-columns:310px 1fr;height:100vh}
+#pn{background:var(--pn);border-right:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+#ph{padding:14px 16px 10px;border-bottom:1px solid var(--bd)}
+#ph h1{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--ac);display:flex;align-items:center;gap:8px}
+#ph h1 span{font-size:10px;color:var(--dm);font-weight:400}
+#ps{flex:1;overflow-y:auto;padding:8px 12px 20px}
+#ps::-webkit-scrollbar{width:3px}
+#ps::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+.S{margin-bottom:10px}.ST{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;
+text-transform:uppercase;letter-spacing:1.2px;color:var(--dm);margin-bottom:6px;padding-left:2px}
+.C{background:var(--cd);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin-bottom:6px}
+.TB{display:flex;flex-wrap:wrap;gap:4px}
+.TB button{font-family:'JetBrains Mono',monospace;font-size:9px;background:var(--cd);color:var(--dm);
+border:1px solid var(--bd);border-radius:5px;padding:5px 8px;cursor:pointer;transition:.15s;white-space:nowrap}
+.TB button:hover{color:var(--tx);border-color:#2a3040}
+.TB button.active{color:var(--ac);border-color:var(--ac);box-shadow:0 0 12px rgba(56,189,248,.12)}
+.CR{display:flex;gap:4px;margin-top:5px}
+.CR button{flex:1;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;padding:7px 4px;
+border-radius:6px;border:1px solid var(--bd);background:var(--cd);color:var(--tx);cursor:pointer;transition:.15s}
+.CR button.running{background:var(--ac);color:#080a0f;border-color:var(--ac)}
+.CR button:hover{border-color:var(--ac)}
+.P{display:flex;align-items:center;gap:5px;margin:3px 0}
+.P label{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--dm);min-width:68px}
+.P input{flex:1;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:4px;
+padding:3px 5px;font-family:'JetBrains Mono',monospace;font-size:10px;width:42px;text-align:right}
+.P .U{font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--dm);min-width:14px}
+.MG{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px}
+.MR{display:flex;justify-content:space-between;align-items:center;font-size:10px}
+.MR .ML{color:var(--dm);font-size:9px}.MR .MV{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:10px}
+.MV.ok{color:var(--ok)}.MV.er{color:var(--er)}.MV.gp{color:var(--gp)}.MV.ev{color:var(--ev)}
+#GS{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;font-size:9px;
+font-family:'JetBrains Mono',monospace;margin-bottom:6px;border:1px solid var(--bd);background:var(--cd)}
+#GS .dt{width:7px;height:7px;border-radius:50%}
+#GS.on .dt{background:var(--gp);box-shadow:0 0 6px var(--gp)}
+#GS.off .dt{background:var(--er)}
+#GS.on{border-color:rgba(168,85,247,.3)}
+.TG{display:flex;align-items:center;gap:7px;font-size:10px;margin:4px 0}
+.TG label{color:var(--dm);font-family:'JetBrains Mono',monospace;font-size:9px}
+.tg{width:30px;height:16px;background:var(--bd);border-radius:8px;cursor:pointer;position:relative;transition:.2s}
+.tg.on{background:var(--gp)}.tg::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;
+background:#fff;border-radius:50%;transition:.2s}.tg.on::after{left:16px}
+.EB{height:4px;background:var(--bd);border-radius:2px;overflow:hidden;margin:4px 0}
+.EF{height:100%;background:linear-gradient(90deg,var(--ev),var(--a2));border-radius:2px;transition:width .3s}
+.EL{max-height:72px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--dm);
+line-height:1.6;margin-top:4px;background:var(--bg);border-radius:4px;padding:4px 6px}
+.IR{display:flex;gap:4px;margin-top:4px}
+.IR button{flex:1;font-family:'JetBrains Mono',monospace;font-size:8px;padding:4px;border-radius:5px;
+border:1px solid var(--bd);background:var(--cd);color:var(--dm);cursor:pointer}
+.IR button:hover{color:var(--tx);border-color:var(--ac)}
+.eb{border-color:rgba(236,72,153,.3)!important;color:var(--ev)!important}
+.eb:hover{border-color:var(--ev)!important;background:rgba(236,72,153,.08)!important}
+#cw{position:relative;overflow:hidden;background:#050810}
+canvas{display:block;width:100%;height:100%}
+#hud{position:absolute;top:10px;left:14px;font-family:'JetBrains Mono',monospace;
+background:rgba(11,14,20,.88);border:1px solid var(--bd);border-radius:7px;padding:7px 12px;
+backdrop-filter:blur(8px);font-size:9px;line-height:1.8}
+#hud .lb{color:var(--dm)}#hud .vl{color:var(--ac);font-weight:600}
+#SB{position:absolute;top:10px;right:14px;font-family:'JetBrains Mono',monospace;font-size:10px;
+font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
+background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
+#SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
+#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}
+#PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
+padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
+backdrop-filter:blur(8px);display:none;line-height:1.7}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="pn">
+ <div id="ph"><h1>◈ APA <span>WebGPU · 进化 · 12USS+LiDAR</span></h1></div>
+ <div id="ps">
+  <div id="GS" class="off"><div class="dt"></div><span id="GL">初始化…</span><span id="GD" style="margin-left:auto;font-size:8px;color:var(--dm)"></span></div>
+  <div class="S"><div class="ST">工具</div><div class="C"><div class="TB" id="toolbar">
+   <button data-mode="select" class="active">⊞ 选择</button><button data-mode="ego">⊕ 车辆</button>
+   <button data-mode="rect">▪ 矩形</button><button data-mode="circle">● 圆形</button>
+   <button data-mode="dyn">◎ 动态</button><button data-mode="slot">⊟ 车位</button>
+  </div></div></div>
+  <div class="S"><div class="ST">仿真</div><div class="C">
+   <div class="CR"><button id="btnPlay">▶ 开始</button><button id="btnStep">⏭ 单步</button><button id="btnReset">↺ 重置</button></div>
+   <div style="font-size:9px;color:var(--dm);margin-top:3px">滚轮缩放 · 空格+拖拽平移 · Del删除</div>
+  </div></div>
+  <div class="S"><div class="ST">传感器 (LiDAR + 12×USS)</div><div class="C">
+   <div class="P"><label>LiDAR距离</label><input id="iLR" type="number" value="25"><span class="U">m</span></div>
+   <div class="P"><label>LiDAR FOV</label><input id="iLF" type="number" value="180"><span class="U">°</span></div>
+   <div class="P"><label>USS距离</label><input id="iUR" type="number" step="0.5" value="5"><span class="U">m</span></div>
+   <div class="P"><label>重规划</label><input id="iRP" type="number" value="3"><span class="U">步</span></div>
+   <div class="TG"><label>显示USS扇区</label><div id="tUSS" class="tg on"></div></div>
+  </div></div>
+  <div class="S"><div class="ST">车辆</div><div class="C">
+   <div class="P"><label>车长</label><input id="iVL" type="number" step="0.1" value="4.6"><span class="U">m</span></div>
+   <div class="P"><label>车宽</label><input id="iVW" type="number" step="0.1" value="1.9"><span class="U">m</span></div>
+   <div class="P"><label>轴距</label><input id="iWB" type="number" step="0.1" value="2.75"><span class="U">m</span></div>
+   <div class="P"><label>前悬</label><input id="iFO" type="number" step="0.05" value="0.95"><span class="U">m</span></div>
+   <div class="P"><label>后悬</label><input id="iRO" type="number" step="0.05" value="0.90"><span class="U">m</span></div>
+   <div class="P"><label>最大转角</label><input id="iMS" type="number" step="1" value="35"><span class="U">°</span></div>
+   <div class="P"><label>膨胀</label><input id="iIF" type="number" step="0.05" value="0.20"><span class="U">m</span></div>
+   <div class="P"><label>dt</label><input id="iDT" type="number" step="0.05" value="0.20"><span class="U">s</span></div>
+  </div></div>
+  <div class="S"><div class="ST">规划器</div><div class="C">
+   <div class="P"><label>最大时间</label><input id="iPT" type="number" value="25"><span class="U">s</span></div>
+   <div class="P"><label>规划速度</label><input id="iPV" type="number" step="0.5" value="1.5"><span class="U">m/s</span></div>
+   <div class="P"><label>网格精度</label><input id="iGR" type="number" step="0.05" value="0.50"><span class="U">m</span></div>
+   <div class="TG"><label>显示C-Space</label><div id="tCS" class="tg"></div></div>
+  </div></div>
+  <div class="S"><div class="ST">泊车验证</div><div class="C">
+   <div class="P"><label>航向容差</label><input id="iYT" type="number" step="0.5" value="2.0"><span class="U">°</span></div>
+   <div class="P"><label>横向容差</label><input id="iLT" type="number" step="0.01" value="0.15"><span class="U">m</span></div>
+   <div class="P"><label>压线容差</label><input id="iBT" type="number" step="0.01" value="0.05"><span class="U">m</span></div>
+  </div></div>
+  <div class="S"><div class="ST">⚡ 进化优化器</div><div class="C">
+   <div class="P"><label>种群</label><input id="eP" type="number" value="16"></div>
+   <div class="P"><label>代数</label><input id="eG" type="number" value="6"></div>
+   <div class="P"><label>时间权重</label><input id="ewT" type="number" step="0.1" value="1.0"></div>
+   <div class="P"><label>距离权重</label><input id="ewD" type="number" step="0.1" value="1.0"></div>
+   <div class="P"><label>揉库权重</label><input id="ewG" type="number" step="0.1" value="3.0"></div>
+   <div class="P"><label>偏差权重</label><input id="ewA" type="number" step="0.1" value="5.0"></div>
+   <div class="EB"><div class="EF" id="evoBar" style="width:0%"></div></div>
+   <div class="CR"><button class="eb" id="btnEvo">⚡ 启动进化</button><button id="btnApply" style="border-color:rgba(52,211,153,.3);color:var(--ok)">✓ 应用最优</button></div>
+   <div class="EL" id="evoLog"></div>
+  </div></div>
+  <div class="S"><div class="ST">指标</div><div class="C"><div class="MG">
+   <div class="MR"><span class="ML">时间</span><span class="MV" id="mT">0.0s</span></div>
+   <div class="MR"><span class="ML">状态</span><span class="MV" id="mSt">空闲</span></div>
+   <div class="MR"><span class="ML">换挡</span><span class="MV" id="mG">0</span></div>
+   <div class="MR"><span class="ML">距离</span><span class="MV" id="mD">0.0m</span></div>
+   <div class="MR"><span class="ML">A*</span><span class="MV" id="mPl">—</span></div>
+   <div class="MR"><span class="ML">GPU网格</span><span class="MV gp" id="mGd">—</span></div>
+   <div class="MR"><span class="ML">碰撞</span><span class="MV ok" id="mCo">无</span></div>
+   <div class="MR"><span class="ML">泊车评分</span><span class="MV ev" id="mPS">—</span></div>
+  </div></div></div>
+  <div class="S"><div class="ST">场景预设</div><div class="C">
+   <div class="IR"><button id="btnP1">★ 侧方位</button><button id="btnP2">★ 垂直位</button><button id="btnP3">★ 斜向位</button></div>
+   <div class="IR"><button id="btnP4">★ 压力测试</button><button id="btnExp">📋 导出</button><button id="btnImp">📥 导入</button></div>
+  </div></div>
+ </div>
+</div>
+<div id="cw">
+ <canvas id="canvas"></canvas>
+ <div id="hud"><span class="lb">模式</span> <span class="vl" id="hudM">SELECT</span><br/>
+  <span class="lb">t=</span><span class="vl" id="hudT">0.00</span> <span class="lb">步</span><span class="vl" id="hudS">0</span></div>
+ <div id="SB" class="idle">空闲</div>
+ <div id="PS"></div>
+</div>
+</div>
+<script>
+
+// ═══════════ UTILS ═══════════
+const PI=Math.PI,TAU=2*PI,deg2rad=d=>d*PI/180,rad2deg=r=>r*180/PI;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v,hypot=(a,b)=>Math.sqrt(a*a+b*b);
+function wrapPi(a){a%=TAU;if(a>PI)a-=TAU;if(a<=-PI)a+=TAU;return a;}
+let _uid=0;function uid(){return'o'+(++_uid);}
+
+// ═══════════ WEBGPU C-SPACE ═══════════
+const GPU={device:null,ready:false,pipeline:null,bgl:null,MAX_OBS:48,
+  xMin:-15,yMin:-10,xMax:35,yMax:25,step:0.25,nYaw:36,
+  nX:0,nY:0,total:0,pBuf:null,oBuf:null,outB:null,rdB:null,grid:null,ms:0};
+
+const WGSL=`
+struct P{xMin:f32,yMin:f32,step:f32,nX:u32,nY:u32,nYaw:u32,eL:f32,eW:f32,inf:f32,nObs:u32,_0:f32,_1:f32};
+struct O{kind:f32,x:f32,y:f32,yaw:f32,w:f32,h:f32,r:f32,_:f32};
+@group(0)@binding(0) var<uniform> p:P;
+@group(0)@binding(1) var<storage,read> obs:array<O>;
+@group(0)@binding(2) var<storage,read_write> g:array<u32>;
+fn cn(cx:f32,cy:f32,a:f32,hw:f32,hh:f32,i:u32)->vec2f{
+  let c=cos(a);let s=sin(a);
+  switch(i){case 0u:{return vec2f(cx+c*hw-s*hh,cy+s*hw+c*hh);}
+  case 1u:{return vec2f(cx+c*hw+s*hh,cy+s*hw-c*hh);}
+  case 2u:{return vec2f(cx-c*hw+s*hh,cy-s*hw-c*hh);}
+  default:{return vec2f(cx-c*hw-s*hh,cy-s*hw+c*hh);}}
+}
+fn pj(a:vec2f,b:vec2f,c:vec2f,d:vec2f,ax:vec2f)->vec2f{
+  let v0=dot(a,ax);let v1=dot(b,ax);let v2=dot(c,ax);let v3=dot(d,ax);
+  return vec2f(min(min(v0,v1),min(v2,v3)),max(max(v0,v1),max(v2,v3)));
+}
+fn satRR(x1:f32,y1:f32,a1:f32,hw1:f32,hh1:f32,x2:f32,y2:f32,a2:f32,hw2:f32,hh2:f32)->bool{
+  let e0=cn(x1,y1,a1,hw1,hh1,0u);let e1=cn(x1,y1,a1,hw1,hh1,1u);
+  let e2=cn(x1,y1,a1,hw1,hh1,2u);let e3=cn(x1,y1,a1,hw1,hh1,3u);
+  let o0=cn(x2,y2,a2,hw2,hh2,0u);let o1=cn(x2,y2,a2,hw2,hh2,1u);
+  let o2=cn(x2,y2,a2,hw2,hh2,2u);let o3=cn(x2,y2,a2,hw2,hh2,3u);
+  let ax0=vec2f(e1.y-e0.y,e0.x-e1.x);let ax1=vec2f(e2.y-e1.y,e1.x-e2.x);
+  let ax2=vec2f(o1.y-o0.y,o0.x-o1.x);let ax3=vec2f(o2.y-o1.y,o1.x-o2.x);
+  var pa=pj(e0,e1,e2,e3,ax0);var pb=pj(o0,o1,o2,o3,ax0);if(pa.y<pb.x||pb.y<pa.x){return false;}
+  pa=pj(e0,e1,e2,e3,ax1);pb=pj(o0,o1,o2,o3,ax1);if(pa.y<pb.x||pb.y<pa.x){return false;}
+  pa=pj(e0,e1,e2,e3,ax2);pb=pj(o0,o1,o2,o3,ax2);if(pa.y<pb.x||pb.y<pa.x){return false;}
+  pa=pj(e0,e1,e2,e3,ax3);pb=pj(o0,o1,o2,o3,ax3);if(pa.y<pb.x||pb.y<pa.x){return false;}
+  return true;
+}
+fn rcCol(rx:f32,ry:f32,ra:f32,hw:f32,hh:f32,cx:f32,cy:f32,cr:f32)->bool{
+  let dx=cx-rx;let dy=cy-ry;let c=cos(-ra);let s=sin(-ra);
+  let lx=c*dx-s*dy;let ly=s*dx+c*dy;
+  let nx=clamp(lx,-hw,hw);let ny=clamp(ly,-hh,hh);
+  return(lx-nx)*(lx-nx)+(ly-ny)*(ly-ny)<=cr*cr;
+}
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid:vec3u){
+  let idx=gid.x;if(idx>=p.nX*p.nY*p.nYaw){return;}
+  let iy_aw=idx%p.nYaw;let tmp=idx/p.nYaw;let iy=tmp%p.nY;let ix=tmp/p.nY;
+  let x=p.xMin+f32(ix)*p.step;let y=p.yMin+f32(iy)*p.step;
+  let yaw=f32(iy_aw)*6.283185307/f32(p.nYaw);
+  let eHW=(p.eL+2.0*p.inf)/2.0;let eHH=(p.eW+2.0*p.inf)/2.0;
+  var col=false;
+  for(var i=0u;i<p.nObs;i++){let ob=obs[i];
+    if(ob.kind<0.5){if(satRR(x,y,yaw,eHW,eHH,ob.x,ob.y,ob.yaw,ob.w/2.0,ob.h/2.0)){col=true;break;}}
+    else{if(rcCol(x,y,yaw,eHW,eHH,ob.x,ob.y,ob.r)){col=true;break;}}
+  }g[idx]=select(0u,1u,col);
+}`;
+
+async function initGPU(){
+  GPU.nX=Math.ceil((GPU.xMax-GPU.xMin)/GPU.step);
+  GPU.nY=Math.ceil((GPU.yMax-GPU.yMin)/GPU.step);
+  GPU.total=GPU.nX*GPU.nY*GPU.nYaw;
+  GPU.grid=new Uint32Array(GPU.total);
+  const el=document.getElementById('GS'),lb=document.getElementById('GL'),dt=document.getElementById('GD');
+  dt.textContent=`${(GPU.total/1000)|0}K cells`;
+  document.getElementById('mGd').textContent='—';
+  if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';return;}
+  try{
+    GPU.adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+    if(!GPU.adapter){lb.textContent='无GPU适配器';return;}
+    GPU.device=await GPU.adapter.requestDevice();
+    const md=GPU.device.createShaderModule({code:WGSL});
+    GPU.bgl=GPU.device.createBindGroupLayout({entries:[
+      {binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'uniform'}},
+      {binding:1,visibility:GPUShaderStage.COMPUTE,buffer:{type:'read-only-storage'}},
+      {binding:2,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage'}}]});
+    GPU.pipeline=GPU.device.createComputePipeline({
+      layout:GPU.device.createPipelineLayout({bindGroupLayouts:[GPU.bgl]}),
+      compute:{module:md,entryPoint:'main'}});
+    GPU.pBuf=GPU.device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+    GPU.oBuf=GPU.device.createBuffer({size:GPU.MAX_OBS*32,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+    GPU.outB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC});
+    GPU.rdB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+    GPU.ready=true;
+    const info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
+    el.className='on';lb.textContent=info.description||'WebGPU 已激活';
+    dt.textContent=`${(GPU.total/1000)|0}K · 4090`;
+  }catch(e){console.warn(e);lb.textContent='GPU初始化失败';}
+}
+
+async function computeGrid(obs,vp){
+  const t0=performance.now();
+  if(GPU.ready){
+    const n=Math.min(obs.length,GPU.MAX_OBS);
+    const pm=new Float32Array(12);
+    pm[0]=GPU.xMin;pm[1]=GPU.yMin;pm[2]=GPU.step;
+    const dv=new DataView(pm.buffer);
+    dv.setUint32(12,GPU.nX,true);dv.setUint32(16,GPU.nY,true);dv.setUint32(20,GPU.nYaw,true);
+    pm[6]=vp.length;pm[7]=vp.width;pm[8]=vp.inflation;dv.setUint32(36,n,true);
+    GPU.device.queue.writeBuffer(GPU.pBuf,0,pm);
+    const od=new Float32Array(GPU.MAX_OBS*8);
+    for(let i=0;i<n;i++){const o=obs[i],j=i*8;
+      od[j]=o.shape==='circle'?1:0;od[j+1]=o.x;od[j+2]=o.y;od[j+3]=o.yaw||0;
+      od[j+4]=o.w||0;od[j+5]=o.h||0;od[j+6]=o.r||0;}
+    GPU.device.queue.writeBuffer(GPU.oBuf,0,od);
+    const bg=GPU.device.createBindGroup({layout:GPU.bgl,entries:[
+      {binding:0,resource:{buffer:GPU.pBuf}},{binding:1,resource:{buffer:GPU.oBuf}},
+      {binding:2,resource:{buffer:GPU.outB}}]});
+    const enc=GPU.device.createCommandEncoder();
+    const ps=enc.beginComputePass();ps.setPipeline(GPU.pipeline);ps.setBindGroup(0,bg);
+    ps.dispatchWorkgroups(Math.ceil(GPU.total/256));ps.end();
+    enc.copyBufferToBuffer(GPU.outB,0,GPU.rdB,0,GPU.total*4);
+    GPU.device.queue.submit([enc.finish()]);
+    await GPU.rdB.mapAsync(GPUMapMode.READ);
+    GPU.grid=new Uint32Array(GPU.rdB.getMappedRange().slice(0));
+    GPU.rdB.unmap();
+  }else{
+    // CPU fallback
+    const eHW=(vp.length+2*vp.inflation)/2,eHH=(vp.width+2*vp.inflation)/2;
+    for(let idx=0;idx<GPU.total;idx++){
+      const iw=idx%GPU.nYaw,tmp=(idx/GPU.nYaw)|0,iy=tmp%GPU.nY,ix=(tmp/GPU.nY)|0;
+      const x=GPU.xMin+ix*GPU.step,y=GPU.yMin+iy*GPU.step,yaw=iw*TAU/GPU.nYaw;
+      let c=false;
+      for(const o of obs){
+        if(o.shape==='circle'){if(cpuRC(x,y,yaw,eHW*2,eHH*2,o.x,o.y,o.r||0.3)){c=true;break;}}
+        else{if(cpuSAT(x,y,yaw,eHW*2,eHH*2,o.x,o.y,o.yaw||0,o.w||1,o.h||1)){c=true;break;}}
+      }GPU.grid[idx]=c?1:0;
+    }
+  }
+  GPU.ms=performance.now()-t0;
+}
+
+function gridLK(x,y,yaw){
+  const ix=Math.round((x-GPU.xMin)/GPU.step),iy=Math.round((y-GPU.yMin)/GPU.step);
+  let iw=Math.round((((yaw%TAU)+TAU)%TAU)/(TAU/GPU.nYaw));
+  iw=((iw%GPU.nYaw)+GPU.nYaw)%GPU.nYaw;
+  if(ix<0||ix>=GPU.nX||iy<0||iy>=GPU.nY)return 1;
+  return GPU.grid[ix*GPU.nY*GPU.nYaw+iy*GPU.nYaw+iw];
+}
+
+// ═══════════ CPU COLLISION ═══════════
+function cpuRC(rx,ry,ra,rw,rh,cx,cy,cr){
+  const dx=cx-rx,dy=cy-ry,c=Math.cos(-ra),s=Math.sin(-ra);
+  const lx=c*dx-s*dy,ly=s*dx+c*dy;
+  const nx=clamp(lx,-rw/2,rw/2),ny=clamp(ly,-rh/2,rh/2);
+  return(lx-nx)**2+(ly-ny)**2<=cr*cr;
+}
+function cpuSAT(x1,y1,a1,w1,h1,x2,y2,a2,w2,h2){
+  function gc(cx,cy,a,w,h){const c=Math.cos(a),s=Math.sin(a),hw=w/2,hh=h/2;
+    return[{x:cx+c*hw-s*hh,y:cy+s*hw+c*hh},{x:cx+c*hw+s*hh,y:cy+s*hw-c*hh},
+           {x:cx-c*hw+s*hh,y:cy-s*hw-c*hh},{x:cx-c*hw-s*hh,y:cy-s*hw+c*hh}];}
+  function pr(cs,ax,ay){let mn=1e9,mx=-1e9;for(const p of cs){const d=p.x*ax+p.y*ay;if(d<mn)mn=d;if(d>mx)mx=d;}return[mn,mx];}
+  const c1=gc(x1,y1,a1,w1,h1),c2=gc(x2,y2,a2,w2,h2);
+  for(const cs of[c1,c2])for(let i=0;i<2;i++){
+    const j=(i+1)%4,ax=cs[j].y-cs[i].y,ay=cs[i].x-cs[j].x;
+    const[n1,x1p]=pr(c1,ax,ay),[n2,x2p]=pr(c2,ax,ay);
+    if(x1p<n2||x2p<n1)return false;}
+  return true;
+}
+function egoCol(pose,vp,ob){
+  const ew=vp.length+2*vp.inflation,eh=vp.width+2*vp.inflation;
+  if(ob.shape==='circle')return cpuRC(pose.x,pose.y,pose.yaw,ew,eh,ob.x,ob.y,ob.r||0.3);
+  return cpuSAT(pose.x,pose.y,pose.yaw,ew,eh,ob.x,ob.y,ob.yaw||0,ob.w||1,ob.h||1);
+}
+
+// ═══════════ BICYCLE MODEL ═══════════
+function bicStep(st,steer,a,vp){
+  const dt=vp.dt;a=clamp(a,-vp.maxA,vp.maxA);
+  let v=clamp(st.v+a*dt,-vp.maxV,vp.maxV);
+  if(st.gear===1)v=Math.max(0,v);else v=Math.min(0,v);
+  const yr=(v/vp.wheelbase)*Math.tan(steer);
+  return{x:st.x+v*Math.cos(st.yaw)*dt,y:st.y+v*Math.sin(st.yaw)*dt,
+    yaw:wrapPi(st.yaw+yr*dt),v,gear:st.gear};
+}
+
+// ═══════════ 12-USS SENSOR LAYOUT ═══════════
+// Industry standard: 4 front, 4 rear, 2 left side, 2 right side
+// Positions relative to vehicle center, angles relative to vehicle heading
+function getUSSLayout(vp){
+  const L=vp.length,W=vp.width,fo=vp.frontOverhang,ro=vp.rearOverhang;
+  const wb=vp.wheelbase;
+  // Front bumper center-x = rearAxle + wheelbase + frontOverhang - L/2
+  // Actually simpler: front bumper at +L/2, rear at -L/2
+  const fBump=L/2, rBump=-L/2;
+  return[
+    // Front 4: left-corner, left-center, right-center, right-corner
+    {x:fBump,y: W*0.42, ang: deg2rad(60),  fov:deg2rad(60), name:'FL'},
+    {x:fBump,y: W*0.15, ang: deg2rad(10),  fov:deg2rad(60), name:'FCL'},
+    {x:fBump,y:-W*0.15, ang: deg2rad(-10), fov:deg2rad(60), name:'FCR'},
+    {x:fBump,y:-W*0.42, ang: deg2rad(-60), fov:deg2rad(60), name:'FR'},
+    // Rear 4: left-corner, left-center, right-center, right-corner
+    {x:rBump,y: W*0.42, ang: deg2rad(120), fov:deg2rad(60), name:'RL'},
+    {x:rBump,y: W*0.15, ang: deg2rad(170), fov:deg2rad(60), name:'RCL'},
+    {x:rBump,y:-W*0.15, ang: deg2rad(-170),fov:deg2rad(60), name:'RCR'},
+    {x:rBump,y:-W*0.42, ang: deg2rad(-120),fov:deg2rad(60), name:'RR'},
+    // Side 2+2: at B-pillar and C-pillar positions
+    {x: wb*0.15, y: W/2, ang: deg2rad(90),  fov:deg2rad(70), name:'SFL'},
+    {x:-wb*0.15, y: W/2, ang: deg2rad(90),  fov:deg2rad(70), name:'SRL'},
+    {x: wb*0.15, y:-W/2, ang: deg2rad(-90), fov:deg2rad(70), name:'SFR'},
+    {x:-wb*0.15, y:-W/2, ang: deg2rad(-90), fov:deg2rad(70), name:'SRR'},
+  ];
+}
+
+function getPerceivedObs(){
+  const e=scene.ego, vp=cfg.vehicle;
+  const lidarRange=cfg.sensor.lidarRange, lidarFov=deg2rad(cfg.sensor.lidarFov);
+  const ussRange=cfg.sensor.ussRange;
+  const cosY=Math.cos(e.yaw),sinY=Math.sin(e.yaw);
+  const out=[];const seen=new Set();
+
+  for(const ob of scene.obstacles){
+    const dx=ob.x-e.x,dy=ob.y-e.y,d=hypot(dx,dy);
+    let detected=false;
+
+    // LiDAR check (front-mounted)
+    if(d<=lidarRange){
+      const ang=wrapPi(Math.atan2(dy,dx)-e.yaw);
+      if(Math.abs(ang)<=lidarFov/2) detected=true;
+    }
+
+    // USS check - any of 12 sensors
+    if(!detected && d<=ussRange+3){
+      const ussL=getUSSLayout(vp);
+      for(const u of ussL){
+        // Transform USS world position
+        const ux=e.x+cosY*u.x-sinY*u.y;
+        const uy=e.y+sinY*u.x+cosY*u.y;
+        const uAng=e.yaw+u.ang;
+        const odx=ob.x-ux,ody=ob.y-uy;
+        const od=hypot(odx,ody);
+        if(od<=ussRange){
+          const oAng=wrapPi(Math.atan2(ody,odx)-uAng);
+          if(Math.abs(oAng)<=u.fov/2){detected=true;break;}
+        }
+      }
+    }
+
+    if(detected && !seen.has(ob.id)){
+      seen.add(ob.id);
+      // Add noise for realism
+      out.push({...ob,x:ob.x+(Math.random()-.5)*.04,y:ob.y+(Math.random()-.5)*.04});
+    }
+  }
+  return out;
+}
+
+// ═══════════ PARKING VALIDATION ═══════════
+// Returns {pass, score, yawErr, latErr, minLineGap, details}
+function validateParking(ego,slot,vp){
+  const goal=slot.goal;
+  const poly=slot.poly;
+
+  // 1) Yaw alignment error (how "straight" is the car relative to slot)
+  const yawErr=Math.abs(wrapPi(ego.yaw-goal.yaw));
+  const yawTol=deg2rad(+document.getElementById('iYT').value||2);
+
+  // 2) Lateral offset (perpendicular distance from slot centerline)
+  // Slot centerline is the line along the goal's heading through the slot center
+  const slotCx=poly.reduce((s,p)=>s+p.x,0)/poly.length;
+  const slotCy=poly.reduce((s,p)=>s+p.y,0)/poly.length;
+  const gcos=Math.cos(goal.yaw),gsin=Math.sin(goal.yaw);
+  // Project ego center onto slot perpendicular axis
+  const dx=ego.x-slotCx,dy=ego.y-slotCy;
+  const latErr=Math.abs(-gsin*dx+gcos*dy);
+  const latTol=+document.getElementById('iLT').value||0.15;
+
+  // 3) Line crossing check - all 4 corners of ego must be inside slot polygon
+  const egoCorners=getEgoCorners(ego,vp);
+  let minLineGap=Infinity;
+  let insideAll=true;
+  for(const c of egoCorners){
+    const d=pointToPolyDist(c,poly);
+    minLineGap=Math.min(minLineGap,d);
+    if(d<0)insideAll=false; // negative means outside
+  }
+  const lineTol=+document.getElementById('iBT').value||0.05;
+  const linePass=minLineGap>=-lineTol;
+
+  const yawPass=yawErr<=yawTol;
+  const latPass=latErr<=latTol;
+  const pass=yawPass&&latPass&&linePass;
+
+  // Score: 0~100, higher is better
+  const yawScore=Math.max(0,100-rad2deg(yawErr)*20);
+  const latScore=Math.max(0,100-latErr*200);
+  const lineScore=Math.max(0,100-Math.max(0,-minLineGap)*500);
+  const score=(yawScore*0.3+latScore*0.3+lineScore*0.4);
+
+  return{pass,score,yawErr:rad2deg(yawErr),latErr,minLineGap,
+    yawPass,latPass,linePass,
+    details:`航向${rad2deg(yawErr).toFixed(1)}° 横偏${(latErr*100).toFixed(0)}cm 线距${(minLineGap*100).toFixed(0)}cm`};
+}
+
+function getEgoCorners(ego,vp){
+  const hw=vp.length/2,hh=vp.width/2;
+  const c=Math.cos(ego.yaw),s=Math.sin(ego.yaw);
+  return[
+    {x:ego.x+c*hw-s*hh,y:ego.y+s*hw+c*hh},
+    {x:ego.x+c*hw+s*hh,y:ego.y+s*hw-c*hh},
+    {x:ego.x-c*hw+s*hh,y:ego.y-s*hw-c*hh},
+    {x:ego.x-c*hw-s*hh,y:ego.y-s*hw+c*hh},
+  ];
+}
+
+// Signed distance from point to polygon (positive=inside, negative=outside)
+function pointToPolyDist(pt,poly){
+  let minD=Infinity;
+  const n=poly.length;
+  for(let i=0;i<n;i++){
+    const a=poly[i],b=poly[(i+1)%n];
+    const d=pointToSegDist(pt,a,b);
+    if(d<minD)minD=d;
+  }
+  // Check if inside polygon
+  let inside=false;
+  for(let i=0,j=n-1;i<n;j=i++){
+    const yi=poly[i].y,yj=poly[j].y,xi=poly[i].x,xj=poly[j].x;
+    if((yi>pt.y)!==(yj>pt.y)&&pt.x<(xj-xi)*(pt.y-yi)/(yj-yi)+xi)inside=!inside;
+  }
+  return inside?minD:-minD;
+}
+
+function pointToSegDist(p,a,b){
+  const dx=b.x-a.x,dy=b.y-a.y;
+  const len2=dx*dx+dy*dy;
+  if(len2===0)return hypot(p.x-a.x,p.y-a.y);
+  let t=((p.x-a.x)*dx+(p.y-a.y)*dy)/len2;
+  t=clamp(t,0,1);
+  return hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy));
+}
+
+// ═══════════ HYBRID A* (GPU ACCELERATED) ═══════════
+function planHybridAStar(ego0,goal,vp,pc){
+  const dt=vp.dt,SUB=3,maxIt=Math.floor(pc.maxTime/dt);
+  const rXY=pc.resXY,rYaw=pc.resYaw||36;
+  const stSet=[-vp.maxSteer,-0.5*vp.maxSteer,0,0.5*vp.maxSteer,vp.maxSteer];
+  const vPA=pc.vPlan||1.5;
+  const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1;
+  const goalYawTol=deg2rad(pc.goalYawTol||15),goalPosTol=pc.goalPosTol||0.6;
+
+  function disc(x,y,yaw,g){
+    const ix=Math.round(x/rXY),iy=Math.round(y/rXY);
+    const ybs=TAU/rYaw;let iw=Math.round(wrapPi(yaw)/ybs);
+    iw=((iw%rYaw)+rYaw)%rYaw;
+    return`${ix},${iy},${iw},${g}`;
+  }
+  function h(x,y,yaw){return hypot(goal.x-x,goal.y-y)+0.3*Math.abs(wrapPi(goal.yaw-yaw));}
+  function isG(n){return hypot(n.x-goal.x,n.y-goal.y)<goalPosTol&&Math.abs(wrapPi(n.yaw-goal.yaw))<goalYawTol;}
+
+  const nodes=[];const bestG=new Map();const closed=new Set();
+  nodes.push({x:ego0.x,y:ego0.y,yaw:ego0.yaw,gear:ego0.gear,it:0,g:0,pi:-1,st:0});
+  bestG.set(disc(ego0.x,ego0.y,ego0.yaw,ego0.gear),0);
+
+  // Binary min-heap
+  const heap=[];
+  function hPush(f,i){heap.push({f,i});let k=heap.length-1;while(k>0){const p=(k-1)>>1;if(heap[p].f<=heap[k].f)break;[heap[p],heap[k]]=[heap[k],heap[p]];k=p;}}
+  function hPop(){if(!heap.length)return null;const t=heap[0];const l=heap.pop();if(heap.length){heap[0]=l;let i=0;for(;;){const a=2*i+1,b=a+1;let m=i;if(a<heap.length&&heap[a].f<heap[m].f)m=a;if(b<heap.length&&heap[b].f<heap[m].f)m=b;if(m===i)break;[heap[m],heap[i]]=[heap[i],heap[m]];i=m;}}return t;}
+
+  hPush(h(ego0.x,ego0.y,ego0.yaw),0);
+  let exp=0;
+
+  while(true){
+    const it=hPop();if(!it)break;
+    const ni=it.i,n=nodes[ni];
+    const nK=disc(n.x,n.y,n.yaw,n.gear);
+    if(closed.has(nK))continue;closed.add(nK);exp++;
+    if(exp>60000)break;
+
+    if(isG(n)){
+      // Reconstruct coarse path then interpolate substeps
+      const cp=[];let ci=ni;while(ci>=0){cp.push(nodes[ci]);ci=nodes[ci].pi;}cp.reverse();
+      const fp=[cp[0]];
+      for(let i=1;i<cp.length;i++){
+        const pv=cp[i-1],steer=cp[i].st,gear=cp[i].gear;
+        let cu={x:pv.x,y:pv.y,yaw:pv.yaw,v:vPA*gear,gear};
+        for(let s=0;s<SUB;s++){
+          cu=bicStep(cu,steer,0,vp);
+          fp.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,it:pv.it+s+1,st:steer});
+        }
+      }
+      return{path:buildSpeedProfile(fp,vp,vPA),expanded:exp};
+    }
+    if(n.it>=maxIt)continue;
+
+    for(const gear of[1,-1]){
+      for(const steer of stSet){
+        let cu={x:n.x,y:n.y,yaw:n.yaw,v:vPA*gear,gear};
+        let col=false;
+        for(let s=0;s<SUB;s++){
+          cu=bicStep(cu,steer,0,vp);
+          if(gridLK(cu.x,cu.y,cu.yaw)){col=true;break;}
+        }
+        if(col)continue;
+        const k2=disc(cu.x,cu.y,cu.yaw,gear);
+        if(closed.has(k2))continue;
+        const sl=hypot(cu.x-n.x,cu.y-n.y);
+        let cost=sl;
+        if(gear===-1)cost+=W_REV*sl;
+        if(gear!==n.gear)cost+=W_GEAR;
+        cost+=W_STEER*Math.abs(steer-n.st);
+        const g2=n.g+cost;
+        const old=bestG.get(k2);
+        if(old===undefined||g2<old){
+          bestG.set(k2,g2);
+          const ni2=nodes.length;
+          nodes.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,it:n.it+SUB,g:g2,pi:ni,st:steer});
+          hPush(g2+h(cu.x,cu.y,cu.yaw),ni2);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function buildSpeedProfile(pn,vp,vMax){
+  const dt=vp.dt,v=new Array(pn.length).fill(0);
+  for(let i=1;i<pn.length;i++){const dv=vp.maxA*dt;v[i]=clamp(vMax*pn[i].gear,v[i-1]-dv,v[i-1]+dv);}
+  v[v.length-1]=0;
+  for(let i=v.length-2;i>=0;i--){const dv=vp.maxA*dt;if(v[i]>v[i+1]+dv)v[i]=v[i+1]+dv;if(v[i]<v[i+1]-dv)v[i]=v[i+1]-dv;}
+  return pn.map((n,i)=>({t:i*dt,x:n.x,y:n.y,yaw:n.yaw,v:v[i],a:i?((v[i]-v[i-1])/dt):0,st:n.st,gear:n.gear}));
+}
+
+// ═══════════ EVOLUTION OPTIMIZER ═══════════
+// Genetic algorithm that evolves planner hyperparameters to minimize:
+// weighted sum of (total_time, total_distance, gear_switches, parking_deviation)
+let evoState={running:false,gen:0,best:null,bestFit:Infinity,log:[]};
+
+async function runEvolution(){
+  if(evoState.running)return;
+  evoState.running=true;evoState.log=[];evoState.gen=0;evoState.best=null;evoState.bestFit=Infinity;
+  const logEl=document.getElementById('evoLog');
+  const barEl=document.getElementById('evoBar');
+  logEl.textContent='';
+
+  const popSize=+(document.getElementById('eP').value)||16;
+  const maxGen=+(document.getElementById('eG').value)||6;
+  const wT=+(document.getElementById('ewT').value)||1;
+  const wD=+(document.getElementById('ewD').value)||1;
+  const wG=+(document.getElementById('ewG').value)||3;
+  const wA=+(document.getElementById('ewA').value)||5;
+
+  // Chromosome: {vPlan, wRev, wGear, wSteer, goalPosTol, goalYawTol}
+  function randChrome(){return{
+    vPlan:0.8+Math.random()*1.4,     // 0.8~2.2
+    wRev:0.5+Math.random()*4,        // 0.5~4.5
+    wGear:3+Math.random()*12,        // 3~15
+    wSteer:0.2+Math.random()*2.5,    // 0.2~2.7
+    goalPosTol:0.3+Math.random()*0.5, // 0.3~0.8
+    goalYawTol:8+Math.random()*14,    // 8~22 degrees
+  };}
+
+  function crossover(a,b){
+    const c={};
+    for(const k of Object.keys(a))c[k]=Math.random()<0.5?a[k]:b[k];
+    return c;
+  }
+  function mutate(c){
+    const m={...c};
+    const keys=Object.keys(m);
+    const k=keys[Math.floor(Math.random()*keys.length)];
+    m[k]*=(0.7+Math.random()*0.6); // ±30% mutation
+    return m;
+  }
+
+  // Evaluate one chromosome by running full simulation
+  async function evaluate(chrome){
+    const vp={...cfg.vehicle};
+    const pc={...cfg.planner,
+      vPlan:chrome.vPlan,wRev:chrome.wRev,wGear:chrome.wGear,
+      wSteer:chrome.wSteer,goalPosTol:chrome.goalPosTol,goalYawTol:deg2rad(chrome.goalYawTol)};
+
+    // Build grid once (shared across population within same generation)
+    const ego0={...scene.ego};
+    const goal=scene.slot.goal;
+
+    const result=planHybridAStar(ego0,goal,vp,pc);
+    if(!result)return{fitness:1e6,time:0,dist:0,gears:0,parkScore:0};
+
+    const path=result.path;
+    const totalTime=path.length*vp.dt;
+    let totalDist=0,gearSw=0;
+    for(let i=1;i<path.length;i++){
+      totalDist+=hypot(path[i].x-path[i-1].x,path[i].y-path[i-1].y);
+      if(path[i].gear!==path[i-1].gear)gearSw++;
+    }
+    const endPose={x:path[path.length-1].x,y:path[path.length-1].y,yaw:path[path.length-1].yaw};
+    const pv=validateParking(endPose,scene.slot,vp);
+    const deviation=100-pv.score;
+
+    const fitness=wT*totalTime+wD*totalDist+wG*gearSw+wA*deviation;
+    return{fitness,time:totalTime,dist:totalDist,gears:gearSw,parkScore:pv.score,path,chrome,result};
+  }
+
+  // Initial population
+  let pop=[];
+  for(let i=0;i<popSize;i++)pop.push(randChrome());
+
+  // Pre-compute grid (same obstacles for all evaluations)
+  await computeGrid(scene.obstacles,cfg.vehicle);
+
+  for(let gen=0;gen<maxGen;gen++){
+    evoState.gen=gen+1;
+    barEl.style.width=((gen+1)/maxGen*100)+'%';
+
+    // Evaluate all chromosomes
+    const results=[];
+    for(const ch of pop){
+      const r=await evaluate(ch);
+      results.push(r);
+    }
+    results.sort((a,b)=>a.fitness-b.fitness);
+
+    const best=results[0];
+    const msg=`G${gen+1}: fit=${best.fitness.toFixed(1)} t=${best.time.toFixed(1)}s d=${best.dist.toFixed(1)}m 揉库=${best.gears} 评分=${best.parkScore.toFixed(0)}`;
+    evoState.log.push(msg);
+    logEl.textContent=evoState.log.join('\n');
+    logEl.scrollTop=logEl.scrollHeight;
+
+    if(best.fitness<evoState.bestFit){
+      evoState.bestFit=best.fitness;
+      evoState.best=best;
+    }
+
+    document.getElementById('mEB').textContent=`G${gen+1} ${evoState.bestFit.toFixed(1)}`;
+
+    // Selection: top 40% survive
+    const survivors=results.slice(0,Math.ceil(popSize*0.4)).map(r=>r.chrome);
+    // Breed next generation
+    pop=[];
+    for(const s of survivors)pop.push(s); // elitism
+    while(pop.length<popSize){
+      const p1=survivors[Math.floor(Math.random()*survivors.length)];
+      const p2=survivors[Math.floor(Math.random()*survivors.length)];
+      let child=crossover(p1,p2);
+      if(Math.random()<0.3)child=mutate(child);
+      pop.push(child);
+    }
+    // Yield to UI
+    await new Promise(r=>setTimeout(r,10));
+  }
+
+  const msg=`✅ 完成! 最优: fit=${evoState.bestFit.toFixed(1)}`;
+  evoState.log.push(msg);logEl.textContent=evoState.log.join('\n');
+  logEl.scrollTop=logEl.scrollHeight;
+  evoState.running=false;
+}
+
+// ═══════════ CANVAS ═══════════
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1;
+function resize(){const r=canvas.parentElement.getBoundingClientRect();canvas.width=r.width*dpr;canvas.height=r.height*dpr;}
+window.addEventListener('resize',resize);resize();
+const cam={scale:45,ox:0,oy:0};
+cam.ox=canvas.width/(2*dpr)-2*cam.scale;cam.oy=canvas.height/(2*dpr)+2*cam.scale;
+function w2s(wx,wy){return{x:cam.ox+wx*cam.scale,y:cam.oy-wy*cam.scale};}
+function s2w(sx,sy){return{x:(sx-cam.ox)/cam.scale,y:(cam.oy-sy)/cam.scale};}
+
+// ═══════════ CONFIG ═══════════
+const cfg={
+  sensor:{lidarRange:25,lidarFov:180,ussRange:5},
+  vehicle:{length:4.6,width:1.9,wheelbase:2.75,frontOverhang:0.95,rearOverhang:0.90,
+    maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2},
+  planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15},
+  replanEvery:3};
+function syncCfg(){
+  cfg.sensor.lidarRange=+document.getElementById('iLR').value||25;
+  cfg.sensor.lidarFov=+document.getElementById('iLF').value||180;
+  cfg.sensor.ussRange=+document.getElementById('iUR').value||5;
+  cfg.replanEvery=+document.getElementById('iRP').value||3;
+  cfg.vehicle.length=+document.getElementById('iVL').value||4.6;
+  cfg.vehicle.width=+document.getElementById('iVW').value||1.9;
+  cfg.vehicle.wheelbase=+document.getElementById('iWB').value||2.75;
+  cfg.vehicle.frontOverhang=+document.getElementById('iFO').value||0.95;
+  cfg.vehicle.rearOverhang=+document.getElementById('iRO').value||0.90;
+  cfg.vehicle.maxSteer=deg2rad(+document.getElementById('iMS').value||35);
+  cfg.vehicle.inflation=+document.getElementById('iIF').value||0.20;
+  cfg.vehicle.dt=+document.getElementById('iDT').value||0.2;
+  cfg.planner.maxTime=+document.getElementById('iPT').value||25;
+  cfg.planner.vPlan=+document.getElementById('iPV').value||1.5;
+  cfg.planner.resXY=+document.getElementById('iGR').value||0.5;
+}
+document.querySelectorAll('#pn input').forEach(el=>el.addEventListener('input',syncCfg));syncCfg();
+
+// ═══════════ SCENE ═══════════
+function mkScene(){return{t:0,stepN:0,
+  ego:{x:2,y:4,yaw:0,v:0,gear:1},
+  slot:{poly:[{x:7.5,y:2.2},{x:14,y:2.2},{x:14,y:-0.2},{x:7.5,y:-0.2}],goal:{x:10.75,y:1.0,yaw:0},type:'parallel'},
+  obstacles:[
+    {id:uid(),shape:'rect',x:5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
+    {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
+    {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
+    {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
+let scene=mkScene(),running=false,trajectory=null,perceivedObs=[];
+let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
+let showCSpace=false,showUSS=true,lastParkVal=null;
+
+// ═══════════ SIMULATION STEP ═══════════
+let planning=false;
+async function stepOnce(){
+  if(planning)return;syncCfg();
+  const vp=cfg.vehicle,dt=vp.dt,goal=scene.slot.goal;
+
+  // Check if parked - use strict validation
+  const parkVal=validateParking(scene.ego,scene.slot,vp);
+  if(hypot(scene.ego.x-goal.x,scene.ego.y-goal.y)<0.8&&parkVal.pass){
+    planStatus='success';running=false;lastParkVal=parkVal;
+    document.getElementById('btnPlay').textContent='▶ 开始';
+    showParkScore(parkVal);updateMetrics();return;
+  }
+
+  perceivedObs=getPerceivedObs();
+  stepsSincePlan++;
+  if(!trajectory||stepsSincePlan>=cfg.replanEvery){
+    planning=true;
+    await computeGrid(perceivedObs,vp);
+    document.getElementById('mGd').textContent=GPU.ms.toFixed(1)+'ms';
+    const t1=performance.now();
+    const result=planHybridAStar(scene.ego,goal,vp,cfg.planner);
+    lastPlanMs=performance.now()-t1;
+    trajectory=result?result.path:null;
+    stepsSincePlan=0;planning=false;
+    planStatus=trajectory?'planning':'nopath';
+  }
+  if(trajectory&&trajectory.length>=2){
+    const nxt=trajectory[1],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+    scene.ego.gear=nxt.gear;
+    const st=bicStep(scene.ego,nxt.st,nxt.a,vp);
+    scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
+    totalDist+=hypot(st.x-pX,st.y-pY);
+    if(pG!==nxt.gear)gearSwitches++;
+  }
+  for(const ob of scene.obstacles){if(ob.vx||ob.vy){ob.x+=(ob.vx||0)*dt;ob.y+=(ob.vy||0)*dt;}}
+  scene.t+=dt;scene.stepN++;simStepCount++;
+  // Live parking validation
+  lastParkVal=validateParking(scene.ego,scene.slot,vp);
+  updateMetrics();
+}
+
+function showParkScore(pv){
+  const el=document.getElementById('PS');
+  el.style.display='block';
+  el.innerHTML=`<div style="color:${pv.pass?'var(--ok)':'var(--er)'}">
+    ${pv.pass?'✅ 泊车合格':'❌ 泊车不合格'}</div>
+    <div>航向偏差: ${pv.yawErr.toFixed(1)}° ${pv.yawPass?'✓':'✗'}</div>
+    <div>横向偏差: ${(pv.latErr*100).toFixed(0)}cm ${pv.latPass?'✓':'✗'}</div>
+    <div>线距余量: ${(pv.minLineGap*100).toFixed(0)}cm ${pv.linePass?'✓':'✗'}</div>
+    <div style="color:var(--ev)">综合评分: ${pv.score.toFixed(0)}/100</div>`;
+}
+
+function updateMetrics(){
+  document.getElementById('mT').textContent=scene.t.toFixed(1)+'s';
+  document.getElementById('mG').textContent=gearSwitches;
+  document.getElementById('mD').textContent=totalDist.toFixed(1)+'m';
+  document.getElementById('mPl').textContent=lastPlanMs.toFixed(0)+'ms';
+  document.getElementById('hudT').textContent=scene.t.toFixed(2);
+  document.getElementById('hudS').textContent=scene.stepN;
+  const sb=document.getElementById('SB');sb.className=planStatus;
+  const labels={idle:'空闲',planning:'规划中',success:'◈ 泊入',nopath:'无路径'};
+  sb.textContent=labels[planStatus]||'—';
+  const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'—';
+  ms.className='MV '+(planStatus==='success'?'ok':planStatus==='nopath'?'er':'');
+  let col=false;for(const ob of scene.obstacles){if(egoCol(scene.ego,cfg.vehicle,ob)){col=true;break;}}
+  const mc=document.getElementById('mCo');mc.textContent=col?'碰撞!':'无';mc.className='MV '+(col?'er':'ok');
+  if(lastParkVal)document.getElementById('mPS').textContent=lastParkVal.score.toFixed(0)+'/100';
+}
+
+// ═══════════ DRAWING ═══════════
+function draw(){
+  const W=canvas.width/dpr,H=canvas.height/dpr;ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  drawGrid(W,H);if(showCSpace&&GPU.grid)drawCSpace();drawSlot();drawSensorFOV();
+  if(showUSS)drawUSS();
+  if(trajectory&&trajectory.length>1)drawTraj();drawObs();drawEgo();drawGoal();
+  if(lastParkVal&&planStatus==='success')drawParkResult();
+  ctx.restore();
+}
+function drawGrid(W,H){
+  ctx.strokeStyle='#121620';ctx.lineWidth=1;
+  const wl=s2w(0,0),wr=s2w(W,0);
+  for(let x=Math.floor(wl.x);x<=Math.ceil(wr.x);x++){const s=w2s(x,0);ctx.beginPath();ctx.moveTo(s.x,0);ctx.lineTo(s.x,H);ctx.stroke();}
+  const wb=s2w(0,H),wt=s2w(0,0);
+  for(let y=Math.floor(wb.y);y<=Math.ceil(wt.y);y++){const s=w2s(0,y);ctx.beginPath();ctx.moveTo(0,s.y);ctx.lineTo(W,s.y);ctx.stroke();}
+  ctx.strokeStyle='#1c2230';ctx.lineWidth=1.5;const o=w2s(0,0);
+  ctx.beginPath();ctx.moveTo(0,o.y);ctx.lineTo(W,o.y);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(o.x,0);ctx.lineTo(o.x,H);ctx.stroke();
+}
+function drawCSpace(){
+  const ey=scene.ego.yaw;let iw=Math.round((((ey%TAU)+TAU)%TAU)/(TAU/GPU.nYaw));
+  iw=((iw%GPU.nYaw)+GPU.nYaw)%GPU.nYaw;
+  const st=GPU.step,sp=st*cam.scale;if(sp<2)return;
+  ctx.save();ctx.globalAlpha=0.12;ctx.fillStyle='#a855f7';
+  for(let ix=0;ix<GPU.nX;ix++){const wx=GPU.xMin+ix*st;
+    for(let iy=0;iy<GPU.nY;iy++){
+      if(GPU.grid[ix*GPU.nY*GPU.nYaw+iy*GPU.nYaw+iw]){
+        const s=w2s(wx,GPU.yMin+iy*st);ctx.fillRect(s.x-sp/2,s.y-sp/2,sp,sp);}}}
+  ctx.restore();
+}
+function drawSlot(){
+  const poly=scene.slot.poly;if(poly.length<3)return;ctx.save();
+  ctx.beginPath();const p0=w2s(poly[0].x,poly[0].y);ctx.moveTo(p0.x,p0.y);
+  for(let i=1;i<poly.length;i++){const p=w2s(poly[i].x,poly[i].y);ctx.lineTo(p.x,p.y);}
+  ctx.closePath();ctx.fillStyle='rgba(52,211,153,.05)';ctx.fill();
+  // Solid parking lines (not dashed - real parking lines)
+  ctx.strokeStyle='rgba(255,255,255,.6)';ctx.lineWidth=2;ctx.stroke();
+  ctx.fillStyle='#34d399';
+  for(const pt of poly){const p=w2s(pt.x,pt.y);ctx.beginPath();ctx.arc(p.x,p.y,2.5,0,TAU);ctx.fill();}
+  const cx=poly.reduce((s,p)=>s+p.x,0)/poly.length,cy=poly.reduce((s,p)=>s+p.y,0)/poly.length;
+  const cs=w2s(cx,cy);ctx.font='600 9px "JetBrains Mono",monospace';ctx.fillStyle='rgba(52,211,153,.6)';
+  ctx.textAlign='center';ctx.fillText('车位',cs.x,cs.y+3);ctx.restore();
+}
+function drawGoal(){
+  const g=scene.slot.goal,gs=w2s(g.x,g.y);ctx.save();ctx.translate(gs.x,gs.y);ctx.rotate(-g.yaw);
+  const L=cfg.vehicle.length*cam.scale,W=cfg.vehicle.width*cam.scale;
+  ctx.strokeStyle='rgba(52,211,153,.3)';ctx.lineWidth=1;ctx.setLineDash([4,3]);
+  ctx.strokeRect(-L/2,-W/2,L,W);ctx.setLineDash([]);
+  ctx.fillStyle='rgba(52,211,153,.4)';ctx.beginPath();ctx.moveTo(L/2+4,0);ctx.lineTo(L/2-6,-5);ctx.lineTo(L/2-6,5);ctx.closePath();ctx.fill();
+  ctx.restore();
+}
+function drawSensorFOV(){
+  const e=scene.ego,es=w2s(e.x,e.y),range=cfg.sensor.lidarRange*cam.scale,fov=deg2rad(cfg.sensor.lidarFov);
+  ctx.save();ctx.translate(es.x,es.y);
+  ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,range,-(e.yaw+fov/2),-(e.yaw-fov/2));ctx.closePath();
+  const gr=ctx.createRadialGradient(0,0,0,0,0,range);
+  gr.addColorStop(0,'rgba(56,189,248,.06)');gr.addColorStop(1,'rgba(56,189,248,0)');
+  ctx.fillStyle=gr;ctx.fill();ctx.strokeStyle='rgba(56,189,248,.1)';ctx.lineWidth=1;ctx.stroke();ctx.restore();
+}
+function drawUSS(){
+  const e=scene.ego,vp=cfg.vehicle;
+  const ussL=getUSSLayout(vp);
+  const cosY=Math.cos(e.yaw),sinY=Math.sin(e.yaw);
+  const range=cfg.sensor.ussRange*cam.scale;
+  ctx.save();
+  for(const u of ussL){
+    const wx=e.x+cosY*u.x-sinY*u.y;
+    const wy=e.y+sinY*u.x+cosY*u.y;
+    const ws=w2s(wx,wy);
+    const worldAng=e.yaw+u.ang;
+    ctx.save();ctx.translate(ws.x,ws.y);
+    const a1=-(worldAng+u.fov/2),a2=-(worldAng-u.fov/2);
+    ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,range,a1,a2);ctx.closePath();
+    ctx.fillStyle='rgba(245,158,11,.04)';ctx.fill();
+    ctx.strokeStyle='rgba(245,158,11,.15)';ctx.lineWidth=0.5;ctx.stroke();
+    // Sensor dot
+    ctx.beginPath();ctx.arc(0,0,2,0,TAU);ctx.fillStyle='rgba(245,158,11,.6)';ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+function drawTraj(){
+  ctx.save();ctx.beginPath();const p0=w2s(trajectory[0].x,trajectory[0].y);ctx.moveTo(p0.x,p0.y);
+  for(let i=1;i<trajectory.length;i++){const p=w2s(trajectory[i].x,trajectory[i].y);ctx.lineTo(p.x,p.y);}
+  ctx.strokeStyle='rgba(129,140,248,.5)';ctx.lineWidth=2;ctx.stroke();
+  const step=Math.max(1,Math.floor(trajectory.length/12));ctx.fillStyle='rgba(129,140,248,.6)';
+  for(let i=0;i<trajectory.length;i+=step){
+    const pt=trajectory[i],ps=w2s(pt.x,pt.y);ctx.save();ctx.translate(ps.x,ps.y);ctx.rotate(-pt.yaw);
+    ctx.beginPath();const sz=3.5;
+    if(pt.gear===1){ctx.moveTo(sz,0);ctx.lineTo(-sz,-sz*.6);ctx.lineTo(-sz,sz*.6);}
+    else{ctx.moveTo(-sz,0);ctx.lineTo(sz,-sz*.6);ctx.lineTo(sz,sz*.6);}
+    ctx.closePath();ctx.fill();ctx.restore();}
+  ctx.lineWidth=2.5;
+  for(let i=0;i<trajectory.length-1;i++){
+    const a=trajectory[i],b=trajectory[i+1];const pa=w2s(a.x,a.y),pb=w2s(b.x,b.y);
+    ctx.strokeStyle=a.gear===1?'rgba(56,189,248,.3)':'rgba(248,113,113,.3)';
+    ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();}
+  ctx.restore();
+}
+function drawObs(){
+  const pS=new Set(perceivedObs.map(o=>o.id));
+  for(const ob of scene.obstacles){
+    const ip=pS.has(ob.id),id=!!(ob.vx||ob.vy),os=w2s(ob.x,ob.y);
+    ctx.save();ctx.translate(os.x,os.y);ctx.rotate(-(ob.yaw||0));
+    if(ob.shape==='circle'){
+      const r=(ob.r||0.3)*cam.scale;ctx.beginPath();ctx.arc(0,0,r,0,TAU);
+      ctx.fillStyle=id?'rgba(245,158,11,.2)':'rgba(239,68,68,.15)';ctx.fill();
+      ctx.strokeStyle=id?'rgba(245,158,11,.6)':'rgba(239,68,68,.5)';ctx.lineWidth=ip?2:1;ctx.stroke();
+    }else{
+      const w=(ob.w||1)*cam.scale,h=(ob.h||1)*cam.scale;
+      ctx.fillStyle=id?'rgba(245,158,11,.15)':'rgba(239,68,68,.12)';ctx.fillRect(-w/2,-h/2,w,h);
+      ctx.strokeStyle=id?'rgba(245,158,11,.5)':'rgba(239,68,68,.4)';ctx.lineWidth=ip?2:1;ctx.strokeRect(-w/2,-h/2,w,h);
+    }
+    if(id){ctx.rotate(ob.yaw||0);const vl=hypot(ob.vx||0,ob.vy||0)*cam.scale*2,va=Math.atan2(-(ob.vy||0),ob.vx||0);
+      ctx.rotate(va);ctx.strokeStyle='rgba(245,158,11,.7)';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(vl,0);ctx.stroke();
+      ctx.fillStyle='rgba(245,158,11,.7)';ctx.beginPath();ctx.moveTo(vl+3,0);ctx.lineTo(vl-3,-2.5);ctx.lineTo(vl-3,2.5);ctx.closePath();ctx.fill();}
+    ctx.restore();
+    if(ob.kind){ctx.save();ctx.font='500 8px "JetBrains Mono",monospace';ctx.fillStyle='rgba(200,200,200,.35)';ctx.textAlign='center';
+      ctx.fillText(ob.kind,os.x,os.y+(ob.shape==='circle'?(ob.r||0.3)*cam.scale+10:((ob.h||1)*cam.scale/2+10)));ctx.restore();}
+  }
+  if(selected&&selected.type==='ob'){
+    const ob=scene.obstacles.find(o=>o.id===selected.id);
+    if(ob){const os=w2s(ob.x,ob.y);ctx.save();ctx.strokeStyle='#38bdf8';ctx.lineWidth=2;ctx.setLineDash([4,3]);
+      if(ob.shape==='circle'){ctx.beginPath();ctx.arc(os.x,os.y,(ob.r||0.3)*cam.scale+5,0,TAU);ctx.stroke();}
+      else{ctx.translate(os.x,os.y);ctx.rotate(-(ob.yaw||0));ctx.strokeRect(-(ob.w||1)*cam.scale/2-3,-(ob.h||1)*cam.scale/2-3,(ob.w||1)*cam.scale+6,(ob.h||1)*cam.scale+6);}
+      ctx.setLineDash([]);ctx.restore();}
+  }
+}
+function drawEgo(){
+  const e=scene.ego,es=w2s(e.x,e.y),vp=cfg.vehicle,L=vp.length*cam.scale,W=vp.width*cam.scale;
+  ctx.save();ctx.translate(es.x,es.y);ctx.rotate(-e.yaw);
+  // Body
+  const bg=ctx.createLinearGradient(-L/2,0,L/2,0);
+  bg.addColorStop(0,'rgba(30,58,95,.8)');bg.addColorStop(1,'rgba(56,189,248,.3)');
+  ctx.fillStyle=bg;ctx.beginPath();ctx.roundRect(-L/2,-W/2,L,W,3);ctx.fill();
+  ctx.strokeStyle='rgba(56,189,248,.6)';ctx.lineWidth=1.5;ctx.roundRect(-L/2,-W/2,L,W,3);ctx.stroke();
+  // Windshield
+  ctx.fillStyle='rgba(56,189,248,.12)';ctx.fillRect(L*0.15,-W*0.38,L*0.18,W*0.76);
+  // Lights
+  ctx.fillStyle='rgba(253,224,71,.5)';ctx.fillRect(L/2-2,-W/2+2,3,5);ctx.fillRect(L/2-2,W/2-7,3,5);
+  ctx.fillStyle=e.gear===-1?'rgba(255,255,255,.5)':'rgba(239,68,68,.4)';
+  ctx.fillRect(-L/2-1,-W/2+2,3,4);ctx.fillRect(-L/2-1,W/2-6,3,4);
+  // Direction
+  ctx.fillStyle='rgba(255,255,255,.4)';
+  if(e.gear===1){ctx.beginPath();ctx.moveTo(L/2+7,0);ctx.lineTo(L/2-2,-5);ctx.lineTo(L/2-2,5);ctx.closePath();ctx.fill();}
+  else if(e.gear===-1){ctx.beginPath();ctx.moveTo(-L/2-7,0);ctx.lineTo(-L/2+2,-5);ctx.lineTo(-L/2+2,5);ctx.closePath();ctx.fill();}
+  // Inflation
+  const iL=(vp.length+2*vp.inflation)*cam.scale,iW=(vp.width+2*vp.inflation)*cam.scale;
+  ctx.strokeStyle='rgba(56,189,248,.1)';ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.strokeRect(-iL/2,-iW/2,iL,iW);ctx.setLineDash([]);
+  ctx.restore();
+  if(selected&&selected.type==='ego'){ctx.save();ctx.strokeStyle='#38bdf8';ctx.lineWidth=2;ctx.setLineDash([4,3]);
+    ctx.beginPath();ctx.arc(es.x,es.y,Math.max(L,W)/2+7,0,TAU);ctx.stroke();ctx.setLineDash([]);ctx.restore();}
+}
+function drawParkResult(){
+  if(!lastParkVal)return;
+  // Draw ego corners and their distance to slot lines
+  const corners=getEgoCorners(scene.ego,cfg.vehicle);
+  ctx.save();
+  for(const c of corners){
+    const cs=w2s(c.x,c.y);
+    const d=pointToPolyDist(c,scene.slot.poly);
+    ctx.beginPath();ctx.arc(cs.x,cs.y,4,0,TAU);
+    ctx.fillStyle=d>=0?'rgba(52,211,153,.8)':'rgba(239,68,68,.8)';ctx.fill();
+    ctx.font='600 8px "JetBrains Mono",monospace';ctx.fillStyle='#fff';ctx.textAlign='center';
+    ctx.fillText((d*100).toFixed(0)+'cm',cs.x,cs.y-8);
+  }
+  ctx.restore();
+}
+
+// ═══════════ EDITOR ═══════════
+let mode='select',selected=null,dragging=false,dragOff={x:0,y:0},isPanning=false,panLast={x:0,y:0},spaceDown=false;
+
+document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  mode=b.dataset.mode;document.querySelectorAll('#toolbar button').forEach(b=>b.classList.remove('active'));
+  b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
+
+function resetSim(){
+  running=false;trajectory=null;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
+  planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
+  document.getElementById('btnPlay').textContent='▶ 开始';
+  document.getElementById('btnPlay').classList.remove('running');
+  document.getElementById('PS').style.display='none';
+  updateMetrics();draw();
+}
+
+document.getElementById('btnPlay').addEventListener('click',()=>{running=!running;
+  document.getElementById('btnPlay').textContent=running?'⏸ 暂停':'▶ 开始';
+  document.getElementById('btnPlay').classList.toggle('running',running);});
+document.getElementById('btnStep').addEventListener('click',()=>{stepOnce().then(()=>draw());});
+document.getElementById('btnReset').addEventListener('click',()=>{scene=mkScene();resetSim();});
+
+// ── Scene Presets ──
+document.getElementById('btnP1').addEventListener('click',()=>{
+  // 侧方位停车 (parallel)
+  scene=mkScene();resetSim();
+});
+
+document.getElementById('btnP2').addEventListener('click',()=>{
+  // 垂直泊车
+  scene={t:0,stepN:0,ego:{x:-4,y:5,yaw:0,v:0,gear:1},
+    slot:{poly:[{x:5,y:3.2},{x:8,y:3.2},{x:8,y:-1.2},{x:5,y:-1.2}],
+      goal:{x:6.5,y:1.0,yaw:deg2rad(-90)},type:'perpendicular'},
+    obstacles:[
+      {id:uid(),shape:'rect',x:3.2,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'rect',x:9.8,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'circle',x:1,y:6,yaw:0,r:0.3,vx:0.3,vy:-0.1,kind:'行人'},
+      {id:uid(),shape:'rect',x:-2,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'锥桶'},
+      {id:uid(),shape:'rect',x:12,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'锥桶'}]};
+  resetSim();
+});
+
+document.getElementById('btnP3').addEventListener('click',()=>{
+  // 斜向泊车 (60°)
+  const ang=deg2rad(60);
+  scene={t:0,stepN:0,ego:{x:-3,y:6,yaw:0,v:0,gear:1},
+    slot:{poly:[
+      {x:6,y:3},{x:6+Math.cos(ang)*3,y:3+Math.sin(ang)*3},
+      {x:6+Math.cos(ang)*3-Math.sin(ang)*5,y:3+Math.sin(ang)*3+Math.cos(ang)*5},
+      {x:6-Math.sin(ang)*5,y:3+Math.cos(ang)*5}],
+      goal:{x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,yaw:ang-PI/2},type:'angled'},
+    obstacles:[
+      {id:uid(),shape:'rect',x:4,y:2,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'rect',x:8.5,y:5,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'circle',x:2,y:7,yaw:0,r:0.3,vx:0.2,vy:0,kind:'行人'}]};
+  resetSim();
+});
+
+document.getElementById('btnP4').addEventListener('click',()=>{
+  // 压力测试 - 多障碍物、动态
+  scene={t:0,stepN:0,ego:{x:-2,y:6,yaw:0,v:0,gear:1},
+    slot:{poly:[{x:7,y:2.5},{x:14,y:2.5},{x:14,y:-0.5},{x:7,y:-0.5}],goal:{x:10.5,y:1.0,yaw:0},type:'parallel'},
+    obstacles:[
+      {id:uid(),shape:'rect',x:4.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'rect',x:17,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'circle',x:5,y:7,yaw:0,r:0.3,vx:0.4,vy:-0.12,kind:'行人'},
+      {id:uid(),shape:'circle',x:15,y:8,yaw:0,r:0.3,vx:-0.35,vy:-0.15,kind:'行人'},
+      {id:uid(),shape:'circle',x:8,y:5,yaw:0,r:0.3,vx:-0.2,vy:0.25,kind:'行人'},
+      {id:uid(),shape:'rect',x:0,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
+      {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
+      {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'护栏'},
+      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.25,vy:0,kind:'自行车'},
+      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.12,vy:0,kind:'推车'}]};
+  resetSim();
+});
+
+// Evolution buttons
+document.getElementById('btnEvo').addEventListener('click',()=>{
+  if(evoState.running){evoState.running=false;return;}
+  runEvolution();
+});
+document.getElementById('btnApply').addEventListener('click',()=>{
+  if(!evoState.best)return;
+  const b=evoState.best;
+  if(b.path){trajectory=b.path;planStatus='planning';draw();}
+  alert(`最优参数已应用:\n规划速度=${b.chrome.vPlan.toFixed(2)}\n倒车权重=${b.chrome.wRev.toFixed(2)}\n换挡权重=${b.chrome.wGear.toFixed(2)}\n评分=${b.parkScore.toFixed(0)}/100\n揉库=${b.gears}次\n距离=${b.dist.toFixed(1)}m`);
+});
+
+// Toggles
+document.getElementById('tCS').addEventListener('click',function(){showCSpace=!showCSpace;this.classList.toggle('on',showCSpace);draw();});
+document.getElementById('tUSS').addEventListener('click',function(){showUSS=!showUSS;this.classList.toggle('on',showUSS);draw();});
+
+// IO
+document.getElementById('btnExp').addEventListener('click',()=>{navigator.clipboard.writeText(JSON.stringify(scene,null,2)).catch(()=>{});alert('场景已复制到剪贴板');});
+document.getElementById('btnImp').addEventListener('click',()=>{const j=prompt('粘贴场景JSON:');if(!j)return;try{scene=JSON.parse(j);resetSim();}catch(e){alert('JSON格式错误');}});
+
+// Keyboard
+window.addEventListener('keydown',e=>{if(e.code==='Space'){spaceDown=true;canvas.style.cursor='grab';}});
+window.addEventListener('keyup',e=>{if(e.code==='Space'){spaceDown=false;canvas.style.cursor='default';}});
+window.addEventListener('keydown',e=>{if(e.key==='Delete'&&selected&&selected.type==='ob'){scene.obstacles=scene.obstacles.filter(o=>o.id!==selected.id);selected=null;draw();}});
+
+// Canvas events
+canvas.addEventListener('wheel',e=>{e.preventDefault();cam.scale=clamp(cam.scale*(e.deltaY>0?0.92:1.08),8,250);draw();},{passive:false});
+canvas.addEventListener('pointerdown',e=>{
+  const r=canvas.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top;
+  if(spaceDown){isPanning=true;panLast={x:px,y:py};return;}
+  const w=s2w(px,py);
+  if(mode==='ego'){scene.ego.x=w.x;scene.ego.y=w.y;selected={type:'ego'};draw();return;}
+  if(mode==='rect'){const ob={id:uid(),shape:'rect',x:w.x,y:w.y,yaw:0,w:1.8,h:0.8,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
+  if(mode==='circle'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.35,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
+  if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-0.3,vy:0,kind:'行人'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
+  if(mode==='slot'){scene.slot.poly=[{x:w.x-2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y-1.2},{x:w.x-2.75,y:w.y-1.2}];scene.slot.goal={x:w.x,y:w.y,yaw:0};selected={type:'slot'};draw();return;}
+  const hit=pickObj(w.x,w.y);selected=hit;
+  if(hit){dragging=true;if(hit.type==='ego')dragOff={x:scene.ego.x-w.x,y:scene.ego.y-w.y};
+    else if(hit.type==='ob'){const ob=scene.obstacles.find(o=>o.id===hit.id);if(ob)dragOff={x:ob.x-w.x,y:ob.y-w.y};}
+    else if(hit.type==='slot'){const c=pCen(scene.slot.poly);dragOff={x:c.x-w.x,y:c.y-w.y};}}
+  draw();
+});
+canvas.addEventListener('pointermove',e=>{
+  const r=canvas.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top;
+  if(isPanning){cam.ox+=px-panLast.x;cam.oy+=py-panLast.y;panLast={x:px,y:py};draw();return;}
+  if(!dragging||!selected)return;const w=s2w(px,py);
+  if(selected.type==='ego'){scene.ego.x=w.x+dragOff.x;scene.ego.y=w.y+dragOff.y;}
+  else if(selected.type==='ob'){const ob=scene.obstacles.find(o=>o.id===selected.id);if(ob){ob.x=w.x+dragOff.x;ob.y=w.y+dragOff.y;}}
+  else if(selected.type==='slot'){const c=pCen(scene.slot.poly);const nx=w.x+dragOff.x,ny=w.y+dragOff.y,dx=nx-c.x,dy=ny-c.y;
+    scene.slot.poly=scene.slot.poly.map(p=>({x:p.x+dx,y:p.y+dy}));scene.slot.goal.x+=dx;scene.slot.goal.y+=dy;}
+  draw();
+});
+canvas.addEventListener('pointerup',()=>{dragging=false;isPanning=false;});
+
+function pickObj(x,y){
+  const d2=(a,b,c,d)=>(a-c)**2+(b-d)**2;
+  if(d2(x,y,scene.ego.x,scene.ego.y)<1.5)return{type:'ego'};
+  for(const ob of scene.obstacles){
+    if(ob.shape==='circle'){if(d2(x,y,ob.x,ob.y)<(ob.r||0.3)**2+0.3)return{type:'ob',id:ob.id};}
+    else{const r=0.5*hypot(ob.w||1,ob.h||1);if(d2(x,y,ob.x,ob.y)<r*r+0.3)return{type:'ob',id:ob.id};}}
+  const bb=pBB(scene.slot.poly);if(x>=bb.x0&&x<=bb.x1&&y>=bb.y0&&y<=bb.y1)return{type:'slot'};return null;
+}
+function pBB(p){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;for(const v of p){x0=Math.min(x0,v.x);y0=Math.min(y0,v.y);x1=Math.max(x1,v.x);y1=Math.max(y1,v.y);}return{x0,y0,x1,y1};}
+function pCen(p){let x=0,y=0;for(const v of p){x+=v.x;y+=v.y;}return{x:x/p.length,y:y/p.length};}
+
+// ═══════════ MAIN LOOP ═══════════
+let lastFrame=0,accum=0;
+async function loop(ts){
+  requestAnimationFrame(loop);if(!lastFrame)lastFrame=ts;
+  const d=(ts-lastFrame)/1000;lastFrame=ts;
+  if(running&&planStatus!=='success'&&!planning){
+    accum+=d;const st=cfg.vehicle.dt;if(accum>st*4)accum=st*4;
+    while(accum>=st){accum-=st;await stepOnce();}
+  }
+  draw();
+}
+initGPU().then(()=>{requestAnimationFrame(loop);draw();updateMetrics();});
+</script>
+</body>
+</html>
