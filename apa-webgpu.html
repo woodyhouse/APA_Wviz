@@ -72,7 +72,7 @@ backdrop-filter:blur(8px);font-size:9px;line-height:1.8}
 font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
 background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
 #SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
-#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}#SB.aligning{color:var(--wn);border-color:var(--wn)}
+#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}#SB.aligning{color:var(--wn);border-color:var(--wn)}#SB.avoiding{color:var(--gp);border-color:var(--gp)}
 #SB.emergency{color:var(--er);border-color:var(--er);box-shadow:0 0 10px rgba(239,68,68,.25)}
 #PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
 padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
@@ -146,6 +146,7 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
   <div class="S"><div class="ST">场景预设</div><div class="C">
    <div class="IR"><button id="btnP1">★ 侧方位</button><button id="btnP2">★ 垂直位</button><button id="btnP3">★ 斜向位</button></div>
    <div class="IR"><button id="btnP4">★ 压力测试</button><button id="btnExp">📋 导出</button><button id="btnImp">📥 导入</button></div>
+   <div class="IR"><button id="btnYawL">↺ 车头左转</button><button id="btnYawR">↻ 车头右转</button></div>
   </div></div>
  </div>
 </div>
@@ -164,6 +165,8 @@ const PI=Math.PI,TAU=2*PI,deg2rad=d=>d*PI/180,rad2deg=r=>r*180/PI;
 const clamp=(v,a,b)=>v<a?a:v>b?b:v,hypot=(a,b)=>Math.sqrt(a*a+b*b);
 function wrapPi(a){a%=TAU;if(a>PI)a-=TAU;if(a<=-PI)a+=TAU;return a;}
 let _uid=0;function uid(){return'o'+(++_uid);}
+const kmh2ms=v=>v/3.6;
+const MOVING_KIND_SPEED={行人:kmh2ms(5),自行车:kmh2ms(20),对向车:kmh2ms(15)};
 
 // ═══════════ WEBGPU C-SPACE ═══════════
 const GPU={device:null,ready:false,pipeline:null,bgl:null,MAX_OBS:48,
@@ -797,8 +800,10 @@ function mkScene(){return{t:0,stepN:0,
     {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
     {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
 let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[],planningObstacles=[];
+applySceneMotionProfile();
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
+let avoidState={active:false,goal:null,causeId:null};
 
 // ═══════════ SIMULATION STEP ═══════════
 let planning=false,emergencyHold=false;
@@ -817,7 +822,7 @@ function resetAlignState(keepAbort=false){
 function exceedAlignLimits(scene,vp){
   const maxSteps=75;
   const maxTime=11.5;
-  const maxGearSwitch=7;
+  const maxGearSwitch=4;
   const maxSteerFlip=9;
   const dt=Math.max(0,scene.t-alignState.startT);
   return alignState.steps>maxSteps||dt>maxTime||alignState.gearSw>maxGearSwitch||alignState.steerFlip>maxSteerFlip;
@@ -882,7 +887,7 @@ function updatePolicyReward(success){
 
 async function stepOnce(){
   if(planning)return;syncCfg();
-  const vp=cfg.vehicle,dt=vp.dt,goal=scene.slot.goal;
+  const vp=cfg.vehicle,dt=vp.dt;
 
   // Check if parked - use strict validation
   const parkVal=validateParking(scene.ego,scene.slot,vp);
@@ -897,6 +902,28 @@ async function stepOnce(){
   perceivedObs=getPerceivedObs();
   planningObstacles=getPlanningObstacles();
 
+  if(!avoidState.active){
+    const movingHit=detectMovingObstacleWithin(scene.ego,planningObstacles,2);
+    if(movingHit){
+      const avoidGoal=buildAvoidGoal(scene.ego,movingHit,scene.slot.goal);
+      if(avoidGoal){
+        avoidState={active:true,goal:avoidGoal,causeId:movingHit.id||null};
+        trajectory=null;
+        trajectoryIndex=1;
+        stepsSincePlan=cfg.replanEvery;
+        planStatus='avoiding';
+      }
+    }
+  }
+
+  if(avoidState.active&&isAvoidGoalReached(scene.ego,avoidState.goal)){
+    avoidState={active:false,goal:null,causeId:null};
+    trajectory=null;
+    trajectoryIndex=1;
+    stepsSincePlan=cfg.replanEvery;
+    planStatus='planning';
+  }
+
   if(hasImmediateCollision(scene.ego,vp,planningObstacles)){
     engageEmergencyStop();
     updateMetrics();
@@ -909,7 +936,7 @@ async function stepOnce(){
     stepsSincePlan=cfg.replanEvery;
   }
 
-  if(shouldRunFinalAlign(scene.ego,scene.slot,vp)){
+  if(!avoidState.active&&shouldRunFinalAlign(scene.ego,scene.slot,vp)){
     if(planStatus!=='aligning'||alignState.steps===0)alignState.startT=scene.t;
     planStatus='aligning';
     const ok=runFinalAlignStep(scene.ego,scene.slot,vp,planningObstacles);
@@ -948,12 +975,14 @@ async function stepOnce(){
     await computeGrid(planningObstacles,vp);
     document.getElementById('mGd').textContent=(GPU.ready?'GPU ':'CPU ')+GPU.ms.toFixed(1)+'ms';
     const t1=performance.now();
-    const result=planHybridAStar(scene.ego,goal,vp,cfg.planner);
+    const result=avoidState.active
+      ?planHybridAStar(scene.ego,avoidState.goal,vp,{...cfg.planner,maxTime:Math.min(8,cfg.planner.maxTime),wRev:Math.max(18,cfg.planner.wRev*3.5),wGear:Math.max(12,cfg.planner.wGear*1.5),goalPosTol:Math.min(0.5,cfg.planner.goalPosTol),goalYawTol:Math.min(20,cfg.planner.goalYawTol)})
+      :planShortestParkingPath(scene.ego,vp,cfg.planner);
     lastPlanMs=performance.now()-t1;
     trajectory=result?result.path:null;
     trajectoryIndex=1;
     stepsSincePlan=0;planning=false;
-    planStatus=trajectory?'planning':'nopath';
+    planStatus=trajectory?(avoidState.active?'avoiding':'planning'):'nopath';
     if(!trajectory&&policyBandit.episode&&!policyBandit.episode.updated&&scene.t-policyBandit.episode.t0>cfg.planner.maxTime*0.6){updatePolicyReward(false);} 
   }
   if(trajectory&&trajectory.length>=2){
@@ -1031,6 +1060,77 @@ function engageEmergencyStop(){
   planStatus='emergency';
 }
 
+
+
+function isMovingObstacle(ob){
+  return (Math.abs(ob.vx||0)>1e-3||Math.abs(ob.vy||0)>1e-3)&&ob.kind!=='停车';
+}
+
+function detectMovingObstacleWithin(ego,obs,r=2){
+  let best=null,bestD=Infinity;
+  for(const ob of obs){
+    if(!isMovingObstacle(ob))continue;
+    const d=hypot((ob.x||0)-ego.x,(ob.y||0)-ego.y);
+    if(d<=r&&d<bestD){best=ob;bestD=d;}
+  }
+  return best;
+}
+
+function buildAvoidGoal(ego,ob,slotGoal){
+  const dX=ego.x-(ob.x||0),dY=ego.y-(ob.y||0);
+  const dN=Math.max(1e-4,hypot(dX,dY));
+  const away={x:dX/dN,y:dY/dN};
+  const fwd={x:Math.cos(ego.yaw),y:Math.sin(ego.yaw)};
+  const side={x:-fwd.y,y:fwd.x};
+  const sideSign=Math.sign(side.x*away.x+side.y*away.y)||1;
+  const gx=ego.x+fwd.x*2.6+side.x*sideSign*1.2+away.x*0.9;
+  const gy=ego.y+fwd.y*2.6+side.y*sideSign*1.2+away.y*0.9;
+  const gYaw=wrapPi(ego.yaw+clamp(wrapPi(slotGoal.yaw-ego.yaw),-deg2rad(20),deg2rad(20)));
+  return {x:gx,y:gy,yaw:gYaw};
+}
+
+function isAvoidGoalReached(ego,goal){
+  if(!goal)return false;
+  return hypot(ego.x-goal.x,ego.y-goal.y)<=0.55&&Math.abs(rad2deg(wrapPi(ego.yaw-goal.yaw)))<=12;
+}
+
+function pathLength(path){
+  if(!path||path.length<2)return Infinity;
+  let d=0;
+  for(let i=1;i<path.length;i++)d+=hypot(path[i].x-path[i-1].x,path[i].y-path[i-1].y);
+  return d;
+}
+
+function planShortestParkingPath(ego,vp,planner){
+  const goals=[scene.slot.goal,{...scene.slot.goal,yaw:wrapPi(scene.slot.goal.yaw+PI)}];
+  let bestRes=null,bestGoal=goals[0],bestLen=Infinity;
+  for(const g of goals){
+    const res=planHybridAStar(ego,g,vp,planner);
+    if(!res)continue;
+    const len=pathLength(res.path);
+    if(len<bestLen){bestLen=len;bestRes=res;bestGoal=g;}
+  }
+  if(bestRes)scene.slot.goal.yaw=bestGoal.yaw;
+  return bestRes;
+}
+
+function applyMotionProfile(ob){
+  if(!ob||!ob.kind)return;
+  if(ob.kind==='推车')ob.kind='对向车';
+  const target=MOVING_KIND_SPEED[ob.kind];
+  if(!target)return;
+  const vx=ob.vx||0,vy=ob.vy||0,base=Math.max(1e-4,hypot(vx,vy));
+  ob.vx=vx===0&&vy===0?-target:target*vx/base;
+  ob.vy=vx===0&&vy===0?0:target*vy/base;
+  if(ob.kind==='对向车'&&ob.shape==='rect'){
+    ob.w=cfg.vehicle.length;
+    ob.h=cfg.vehicle.width;
+  }
+}
+
+function applySceneMotionProfile(){
+  for(const ob of scene.obstacles)applyMotionProfile(ob);
+}
 
 function poseErrorInGoalFrame(ego,goal){
   const c=Math.cos(goal.yaw),sg=Math.sin(goal.yaw);
@@ -1157,7 +1257,7 @@ function updateMetrics(){
   document.getElementById('hudT').textContent=scene.t.toFixed(2);
   document.getElementById('hudS').textContent=scene.stepN;
   const sb=document.getElementById('SB');sb.className=planStatus;
-  const labels={idle:'空闲',planning:'规划中',aligning:'姿态调整',success:'◈ 泊入',nopath:'无路径',emergency:'紧急制动'};
+  const labels={idle:'空闲',planning:'规划中',avoiding:'主动避障',aligning:'姿态调整',success:'◈ 泊入',nopath:'无路径',emergency:'紧急制动'};
   sb.textContent=labels[planStatus]||'—';
   const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'—';
   ms.className='MV '+(planStatus==='success'?'ok':(planStatus==='nopath'||planStatus==='emergency')?'er':planStatus==='aligning'?'ev':'');
@@ -1345,6 +1445,7 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
 
 function resetSim(){
   running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;resetAlignState();totalDist=0;gearSwitches=0;lastPlanMs=0;
+  avoidState={active:false,goal:null,causeId:null};
   policyBandit.episode=null;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
@@ -1358,12 +1459,12 @@ document.getElementById('btnPlay').addEventListener('click',()=>{running=!runnin
   document.getElementById('btnPlay').textContent=running?'⏸ 暂停':'▶ 开始';
   document.getElementById('btnPlay').classList.toggle('running',running);});
 document.getElementById('btnStep').addEventListener('click',()=>{stepOnce().then(()=>draw());});
-document.getElementById('btnReset').addEventListener('click',()=>{scene=mkScene();resetSim();});
+document.getElementById('btnReset').addEventListener('click',()=>{scene=mkScene();applySceneMotionProfile();resetSim();});
 
 // ── Scene Presets ──
 document.getElementById('btnP1').addEventListener('click',()=>{
   // 侧方位停车 (parallel)
-  scene=mkScene();resetSim();
+  scene=mkScene();applySceneMotionProfile();resetSim();
 });
 
 document.getElementById('btnP2').addEventListener('click',()=>{
@@ -1376,6 +1477,7 @@ document.getElementById('btnP2').addEventListener('click',()=>{
       {id:uid(),shape:'circle',x:1,y:6,yaw:0,r:0.3,vx:0.3,vy:-0.1,kind:'行人'},
       {id:uid(),shape:'rect',x:-2,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:12,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'锥桶'}]};
+  applySceneMotionProfile();
   resetSim();
 });
 
@@ -1392,6 +1494,7 @@ document.getElementById('btnP3').addEventListener('click',()=>{
       {id:uid(),shape:'rect',x:4,y:2,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'rect',x:8.5,y:5,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'circle',x:2,y:7,yaw:0,r:0.3,vx:0.2,vy:0,kind:'行人'}]};
+  applySceneMotionProfile();
   resetSim();
 });
 
@@ -1409,7 +1512,8 @@ document.getElementById('btnP4').addEventListener('click',()=>{
       {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
       {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'护栏'},
       {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.65,vy:0,kind:'自行车'},
-      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.35,vy:0,kind:'推车'}]};
+      {id:uid(),shape:'rect',x:12,y:5,yaw:PI,w:4.6,h:1.9,vx:-0.35,vy:0,kind:'对向车'}]};
+  applySceneMotionProfile();
   resetSim();
 });
 
@@ -1431,7 +1535,19 @@ document.getElementById('tUSS').addEventListener('click',function(){showUSS=!sho
 
 // IO
 document.getElementById('btnExp').addEventListener('click',()=>{navigator.clipboard.writeText(JSON.stringify(scene,null,2)).catch(()=>{});alert('场景已复制到剪贴板');});
-document.getElementById('btnImp').addEventListener('click',()=>{const j=prompt('粘贴场景JSON:');if(!j)return;try{scene=JSON.parse(j);resetSim();}catch(e){alert('JSON格式错误');}});
+document.getElementById('btnImp').addEventListener('click',()=>{const j=prompt('粘贴场景JSON:');if(!j)return;try{scene=JSON.parse(j);applySceneMotionProfile();resetSim();}catch(e){alert('JSON格式错误');}});
+
+
+document.getElementById('btnYawL').addEventListener('click',()=>{
+  if(scene.stepN>0)return;
+  scene.ego.yaw=wrapPi(scene.ego.yaw+deg2rad(15));
+  draw();
+});
+document.getElementById('btnYawR').addEventListener('click',()=>{
+  if(scene.stepN>0)return;
+  scene.ego.yaw=wrapPi(scene.ego.yaw-deg2rad(15));
+  draw();
+});
 
 // Keyboard
 window.addEventListener('keydown',e=>{if(e.code==='Space'){spaceDown=true;canvas.style.cursor='grab';}});
@@ -1447,7 +1563,7 @@ canvas.addEventListener('pointerdown',e=>{
   if(mode==='ego'){scene.ego.x=w.x;scene.ego.y=w.y;selected={type:'ego'};draw();return;}
   if(mode==='rect'){const ob={id:uid(),shape:'rect',x:w.x,y:w.y,yaw:0,w:1.8,h:0.8,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='circle'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.35,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
-  if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-0.3,vy:0,kind:'行人'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
+  if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-0.3,vy:0,kind:'行人'};applyMotionProfile(ob);scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='slot'){scene.slot=makeSlot({x:w.x,y:w.y,yaw:0},'parallel');selected={type:'slot'};draw();return;}
   const hit=pickObj(w.x,w.y);selected=hit;
   if(hit){dragging=true;if(hit.type==='ego')dragOff={x:scene.ego.x-w.x,y:scene.ego.y-w.y};
