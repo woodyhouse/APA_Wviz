@@ -423,9 +423,19 @@ function getPerceivedObs(){
 }
 
 // ═══════════ PARKING VALIDATION ═══════════
+
+function getEvalGoalForPose(slot,egoPose){
+  const base=slot.goal;
+  if(!egoPose)return base;
+  const altYaw=wrapPi(base.yaw+PI);
+  const dBase=Math.abs(wrapPi(egoPose.yaw-base.yaw));
+  const dAlt=Math.abs(wrapPi(egoPose.yaw-altYaw));
+  return dAlt<dBase?{...base,yaw:altYaw}:base;
+}
+
 // Returns {pass, score, yawErr, latErr, minLineGap, details}
 function validateParking(ego,slot,vp){
-  const goal=slot.goal;
+  const goal=getEvalGoalForPose(slot,ego);
   const poly=slot.poly;
 
   // 1) Yaw alignment error (how "straight" is the car relative to slot)
@@ -769,8 +779,9 @@ function syncCfg(){
   cfg.planner.maxTime=+document.getElementById('iPT').value||25;
   cfg.planner.vPlan=+document.getElementById('iPV').value||1.5;
   cfg.planner.resXY=+document.getElementById('iGR').value||0.5;
+  syncOncomingVehicleSize();
 }
-document.querySelectorAll('#pn input').forEach(el=>el.addEventListener('input',syncCfg));syncCfg();
+document.querySelectorAll('#pn input').forEach(el=>el.addEventListener('input',syncCfg));
 
 // ═══════════ SCENE ═══════════
 function getSlotSize(type,vp=cfg.vehicle){
@@ -800,11 +811,14 @@ function mkScene(){return{t:0,stepN:0,
     {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
     {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
 let scene=mkScene(),running=false,trajectory=null,trajectoryIndex=1,perceivedObs=[],planningObstacles=[];
+syncCfg();
 applySceneMotionProfile();
 let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
 let showCSpace=false,showUSS=true,lastParkVal=null;
 let avoidState={active:false,goal:null,causeId:null};
 let avoidTriggerState={id:null,count:0};
+let movingObsTracks=new Map();
+let avoidRangeLatch=new Map();
 
 // ═══════════ SIMULATION STEP ═══════════
 let planning=false,emergencyHold=false;
@@ -901,10 +915,11 @@ async function stepOnce(){
   }
 
   perceivedObs=getPerceivedObs();
+  const trackedMovingObs=updateTrackedMovingObstacles(perceivedObs);
   planningObstacles=getPlanningObstacles();
 
   if(!avoidState.active){
-    const movingHit=detectMovingObstacleWithin(scene.ego,planningObstacles,vp,2.0);
+    const movingHit=detectMovingObstacleWithin(scene.ego,trackedMovingObs,vp,2.0);
     if(movingHit){
       avoidTriggerState.count=(avoidTriggerState.id===movingHit.id)?(avoidTriggerState.count+1):1;
       avoidTriggerState.id=movingHit.id||null;
@@ -1074,6 +1089,36 @@ function isMovingObstacle(ob){
   return (Math.abs(ob.vx||0)>1e-3||Math.abs(ob.vy||0)>1e-3)&&ob.kind!=='停车';
 }
 
+function updateTrackedMovingObstacles(perceived){
+  const alpha=0.35;
+  const seen=new Set();
+  for(const ob of perceived){
+    if(!isMovingObstacle(ob))continue;
+    const id=ob.id||uid();
+    seen.add(id);
+    const prev=movingObsTracks.get(id);
+    const cur={
+      ...ob,
+      id,
+      x:prev?prev.x*(1-alpha)+ob.x*alpha:ob.x,
+      y:prev?prev.y*(1-alpha)+ob.y*alpha:ob.y,
+      vx:prev?(prev.vx||0)*(1-alpha)+(ob.vx||0)*alpha:(ob.vx||0),
+      vy:prev?(prev.vy||0)*(1-alpha)+(ob.vy||0)*alpha:(ob.vy||0),
+      miss:0,
+    };
+    movingObsTracks.set(id,cur);
+  }
+  for(const [id,tr] of movingObsTracks){
+    if(seen.has(id))continue;
+    tr.miss=(tr.miss||0)+1;
+    if(tr.miss>6){
+      movingObsTracks.delete(id);
+      avoidRangeLatch.delete(id);
+    }
+  }
+  return Array.from(movingObsTracks.values());
+}
+
 function getRectCorners(x,y,yaw,w,h){
   const c=Math.cos(yaw),s=Math.sin(yaw),hw=w/2,hh=h/2;
   return[
@@ -1113,11 +1158,18 @@ function movingObstacleClearanceToEgo(ego,ob,vp){
 
 function detectMovingObstacleWithin(ego,obs,vp,r=2){
   let best=null,bestGap=Infinity;
+  const seen=new Set();
   for(const ob of obs){
     if(!isMovingObstacle(ob))continue;
+    const id=ob.id||uid();
+    seen.add(id);
     const gap=movingObstacleClearanceToEgo(ego,ob,vp);
-    if(gap<=r&&gap<bestGap){best=ob;bestGap=gap;}
+    const prevIn=avoidRangeLatch.get(id)||false;
+    const inRange=prevIn?gap<=r+0.35:gap<=r;
+    avoidRangeLatch.set(id,inRange);
+    if(inRange&&gap<bestGap){best=ob;bestGap=gap;}
   }
+  for(const id of Array.from(avoidRangeLatch.keys()))if(!seen.has(id))avoidRangeLatch.delete(id);
   return best;
 }
 
@@ -1171,15 +1223,15 @@ function pathLength(path){
 }
 
 function planShortestParkingPath(ego,vp,planner){
-  const goals=[scene.slot.goal,{...scene.slot.goal,yaw:wrapPi(scene.slot.goal.yaw+PI)}];
-  let bestRes=null,bestGoal=goals[0],bestLen=Infinity;
+  const baseGoal=scene.slot.goal;
+  const goals=[baseGoal,{...baseGoal,yaw:wrapPi(baseGoal.yaw+PI)}];
+  let bestRes=null,bestLen=Infinity;
   for(const g of goals){
     const res=planHybridAStar(ego,g,vp,planner);
     if(!res)continue;
     const len=pathLength(res.path);
-    if(len<bestLen){bestLen=len;bestRes=res;bestGoal=g;}
+    if(len<bestLen){bestLen=len;bestRes=res;}
   }
-  if(bestRes)scene.slot.goal.yaw=bestGoal.yaw;
   return bestRes;
 }
 
@@ -1201,6 +1253,16 @@ function applySceneMotionProfile(){
   for(const ob of scene.obstacles)applyMotionProfile(ob);
 }
 
+function syncOncomingVehicleSize(){
+  if(!scene||!scene.obstacles)return;
+  for(const ob of scene.obstacles){
+    if(ob.kind==='对向车'&&ob.shape==='rect'){
+      ob.w=cfg.vehicle.length;
+      ob.h=cfg.vehicle.width;
+    }
+  }
+}
+
 function poseErrorInGoalFrame(ego,goal){
   const c=Math.cos(goal.yaw),sg=Math.sin(goal.yaw);
   const dx=ego.x-goal.x,dy=ego.y-goal.y;
@@ -1208,7 +1270,7 @@ function poseErrorInGoalFrame(ego,goal){
 }
 
 function shouldRunFinalAlign(ego,slot,vp){
-  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const e=poseErrorInGoalFrame(ego,getEvalGoalForPose(slot,ego));
   const nearGoal=Math.hypot(ego.x-slot.goal.x,ego.y-slot.goal.y)<1.5;
   const centerInside=pointInPoly({x:ego.x,y:ego.y},slot.poly);
   const roughAligned=Math.abs(e.latErr)<0.7&&Math.abs(rad2deg(e.yawErr))<28;
@@ -1216,20 +1278,20 @@ function shouldRunFinalAlign(ego,slot,vp){
 }
 
 function isStrictAligned(ego,slot,vp){
-  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const e=poseErrorInGoalFrame(ego,getEvalGoalForPose(slot,ego));
   const pv=validateParking(ego,slot,vp);
   return pv.pass&&Math.abs(rad2deg(e.yawErr))<=0.8&&Math.abs(e.latErr)<=0.05&&Math.abs(e.longErr)<=0.08&&pv.minLineGap>=0.04;
 }
 
 function isCenteredEnoughToStop(ego,slot,vp){
-  const e=poseErrorInGoalFrame(ego,slot.goal);
+  const e=poseErrorInGoalFrame(ego,getEvalGoalForPose(slot,ego));
   const pv=validateParking(ego,slot,vp);
   return pv.pass&&Math.abs(rad2deg(e.yawErr))<=1.0&&Math.abs(e.latErr)<=0.06&&Math.abs(e.longErr)<=0.10&&Math.abs(ego.v)<=0.08;
 }
 
 function runFinalAlignStep(ego,slot,vp,obs){
   alignState.steps++;
-  const e0=poseErrorInGoalFrame(ego,slot.goal);
+  const e0=poseErrorInGoalFrame(ego,getEvalGoalForPose(slot,ego));
   const yawAbs=Math.abs(e0.yawErr),longAbs=Math.abs(e0.longErr);
 
   let desiredSteer=clamp(-(3.4*e0.yawErr+2.1*e0.latErr),-vp.maxSteer*0.95,vp.maxSteer*0.95);
@@ -1269,7 +1331,7 @@ function runFinalAlignStep(ego,slot,vp,obs){
         }
         if(hit)continue;
 
-        const ne=poseErrorInGoalFrame(st,slot.goal);
+        const ne=poseErrorInGoalFrame(st,getEvalGoalForPose(slot,st));
         const corners=getEgoCorners(st,vp);
         let minGap=Infinity;
         for(const c of corners)minGap=Math.min(minGap,pointToPolyDist(c,slot.poly));
@@ -1300,7 +1362,7 @@ function runFinalAlignStep(ego,slot,vp,obs){
   if(steerSign!==0&&alignState.lastSteerSign!==0&&steerSign!==alignState.lastSteerSign)alignState.steerFlip++;
   if(steerSign!==0)alignState.lastSteerSign=steerSign;
 
-  const ne=poseErrorInGoalFrame(ego,slot.goal);
+  const ne=poseErrorInGoalFrame(ego,getEvalGoalForPose(slot,ego));
   const newErr=Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr);
   alignState.lastErr=newErr;
   alignState.lastGear=best.gear;
@@ -1516,6 +1578,8 @@ function resetSim(){
   running=false;trajectory=null;trajectoryIndex=1;perceivedObs=[];planningObstacles=[];emergencyHold=false;resetAlignState();totalDist=0;gearSwitches=0;lastPlanMs=0;
   avoidState={active:false,goal:null,causeId:null};
   avoidTriggerState={id:null,count:0};
+  movingObsTracks.clear();
+  avoidRangeLatch.clear();
   policyBandit.episode=null;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
   document.getElementById('btnPlay').textContent='▶ 开始';
