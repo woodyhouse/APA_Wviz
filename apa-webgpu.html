@@ -805,7 +805,7 @@ const cfg={
   vehicle:{length:4.6,width:1.9,wheelbase:2.75,frontOverhang:0.95,rearOverhang:0.90,
     maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2},
   planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15},
-  replanEvery:1};
+  replanEvery:2};
 function syncCfg(){
   cfg.sensor.lidarRange=+document.getElementById('iLR').value||25;
   cfg.sensor.lidarFov=+document.getElementById('iLF').value||180;
@@ -1127,7 +1127,13 @@ async function stepOnce(){
   const pathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
     ?isPathBlockedSoon(trajectory,trajectoryIndex,planningObstacles,vp)
     :false;
-  if(!trajectory||stepsSincePlan>=cfg.replanEvery||pathBlockedSoon){
+  const nearPathEnd=trajectory&&trajectory.length>3&&trajectoryIndex>=trajectory.length-3;
+  const trackErr=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
+    ?hypot(scene.ego.x-trajectory[trajectoryIndex].x,scene.ego.y-trajectory[trajectoryIndex].y)
+    :0;
+  const periodicReplanInt=avoidState.active?Math.max(2,cfg.replanEvery+1):Math.max(5,cfg.replanEvery+4);
+  const shouldPeriodicReplan=!!trajectory&&stepsSincePlan>=periodicReplanInt&&(nearPathEnd||trackErr>0.95);
+  if(!trajectory||pathBlockedSoon||shouldPeriodicReplan){
     planning=true;
     await computeGrid(planningObstacles,vp);
     document.getElementById('mGd').textContent=(GPU.ready?'GPU ':'CPU ')+GPU.ms.toFixed(1)+'ms';
@@ -1175,7 +1181,7 @@ async function stepOnce(){
 function pickTrackingIndex(path,startIdx,ego,vp){
   if(!path||path.length<2)return 1;
   let idx=clamp(startIdx||1,1,path.length-1);
-  const catchDist=Math.max(0.3,vp.maxV*vp.dt*0.9);
+  const catchDist=Math.max(0.45,vp.maxV*vp.dt*1.15);
   while(idx<path.length-1&&hypot(path[idx].x-ego.x,path[idx].y-ego.y)<catchDist)idx++;
   return idx;
 }
@@ -1461,8 +1467,9 @@ function runFinalAlignStep(ego,slot,vp,obs){
 
   const longDeadband=0.09;
   const gearPref=longAbs>longDeadband?(e0.longErr>0?-1:1):alignState.lastGear;
-  const gearSet=[gearPref,-gearPref];
-  const speedSet=[0.12,0.20,0.28];
+  const allowOppositeGear=longAbs>0.18||Math.abs(rad2deg(e0.yawErr))>6.5||alignState.steps%4===0;
+  const gearSet=allowOppositeGear?[gearPref,-gearPref]:[gearPref];
+  const speedSet=[0.18,0.28,0.36];
   const steerSet=[
     clamp(desiredSteer*1.2,-vp.maxSteer,vp.maxSteer),
     desiredSteer,
@@ -1496,12 +1503,13 @@ function runFinalAlignStep(ego,slot,vp,obs){
         for(const c of corners)minGap=Math.min(minGap,pointToPolyDist(c,slot.poly));
         const outPenalty=minGap< -0.14 ? Math.abs(minGap)*18 : 0;
         const switchPenalty=gear!==alignState.lastGear?0.52:0;
+        const antiShuntPenalty=(gear!==gearPref&&longAbs<0.28)?0.75:0;
         const sign=Math.abs(steer)>vp.maxSteer*0.08?Math.sign(steer):0;
         const flipPenalty=(sign!==0&&alignState.lastSteerSign!==0&&sign!==alignState.lastSteerSign)?0.42:0;
         const steerPenalty=0.10*Math.abs(steer-desiredSteer)+0.03*Math.abs(steer);
         const progress=(Math.abs(e0.yawErr)+1.25*Math.abs(e0.latErr)+1.35*Math.abs(e0.longErr))-(Math.abs(ne.yawErr)+1.25*Math.abs(ne.latErr)+1.35*Math.abs(ne.longErr));
         const lanePenalty=laneOutAmountPose(st,vp,scene.road)*4.0;
-        const cost=4.3*Math.abs(ne.yawErr)+3.4*Math.abs(ne.latErr)+2.5*Math.abs(ne.longErr)+switchPenalty+flipPenalty+steerPenalty+outPenalty+lanePenalty-1.2*progress;
+        const cost=4.3*Math.abs(ne.yawErr)+3.4*Math.abs(ne.latErr)+2.5*Math.abs(ne.longErr)+switchPenalty+antiShuntPenalty+flipPenalty+steerPenalty+outPenalty+lanePenalty-1.2*progress;
         if(!best||cost<best.cost)best={st,gear,steer,cost};
       }
     }
