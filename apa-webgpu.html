@@ -72,7 +72,7 @@ backdrop-filter:blur(8px);font-size:9px;line-height:1.8}
 font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
 background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
 #SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
-#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}
+#SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}\n#SB.emergency{color:var(--er);border-color:var(--er);box-shadow:0 0 10px rgba(239,68,68,.25)}
 #PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
 padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
 backdrop-filter:blur(8px);display:none;line-height:1.7}
@@ -787,6 +787,13 @@ async function stepOnce(){
 
   perceivedObs=getPerceivedObs();
   planningObstacles=getPlanningObstacles();
+
+  if(hasImmediateCollision(scene.ego,vp,planningObstacles)){
+    engageEmergencyStop();
+    updateMetrics();
+    return;
+  }
+
   stepsSincePlan++;
   const pathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
     ?isPathBlockedSoon(trajectory,trajectoryIndex,planningObstacles,vp)
@@ -806,6 +813,13 @@ async function stepOnce(){
   if(trajectory&&trajectory.length>=2){
     trajectoryIndex=pickTrackingIndex(trajectory,trajectoryIndex,scene.ego,vp);
     const nxt=trajectory[Math.min(trajectoryIndex,trajectory.length-1)],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+
+    if(willCollideOnNextStep(scene.ego,nxt,vp,planningObstacles)){
+      engageEmergencyStop();
+      updateMetrics();
+      return;
+    }
+
     scene.ego.gear=nxt.gear;
     const st=bicStep(scene.ego,nxt.st,nxt.a,vp);
     scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
@@ -832,11 +846,39 @@ function isPathBlockedSoon(path,startIdx,obs,vp){
   const from=clamp(startIdx||1,1,path.length-1);
   const to=Math.min(path.length-1,from+12);
   for(let i=from;i<=to;i++){
+    const tPred=(i-from+1)*vp.dt;
     for(const ob of obs){
-      if(egoCol(path[i],vp,ob))return true;
+      const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+      if(egoCol(path[i],vp,pob))return true;
     }
   }
   return false;
+}
+
+function hasImmediateCollision(ego,vp,obs){
+  for(const ob of obs){if(egoCol(ego,vp,ob))return true;}
+  return false;
+}
+
+function willCollideOnNextStep(ego,nxt,vp,obs){
+  const probe={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear:nxt.gear};
+  const st=bicStep(probe,nxt.st,nxt.a,vp);
+  const tPred=vp.dt;
+  for(const ob of obs){
+    const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+    if(egoCol(st,vp,pob))return true;
+  }
+  return false;
+}
+
+function engageEmergencyStop(){
+  running=false;
+  trajectory=null;
+  trajectoryIndex=1;
+  scene.ego.v=0;
+  planStatus='emergency';
+  document.getElementById('btnPlay').textContent='▶ 开始';
+  document.getElementById('btnPlay').classList.remove('running');
 }
 
 function showParkScore(pv){
@@ -858,10 +900,10 @@ function updateMetrics(){
   document.getElementById('hudT').textContent=scene.t.toFixed(2);
   document.getElementById('hudS').textContent=scene.stepN;
   const sb=document.getElementById('SB');sb.className=planStatus;
-  const labels={idle:'空闲',planning:'规划中',success:'◈ 泊入',nopath:'无路径'};
+  const labels={idle:'空闲',planning:'规划中',success:'◈ 泊入',nopath:'无路径',emergency:'紧急制动'};
   sb.textContent=labels[planStatus]||'—';
   const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'—';
-  ms.className='MV '+(planStatus==='success'?'ok':planStatus==='nopath'?'er':'');
+  ms.className='MV '+(planStatus==='success'?'ok':(planStatus==='nopath'||planStatus==='emergency')?'er':'');
   let col=false;for(const ob of scene.obstacles){if(egoCol(scene.ego,cfg.vehicle,ob)){col=true;break;}}
   const mc=document.getElementById('mCo');mc.textContent=col?'碰撞!':'无';mc.className='MV '+(col?'er':'ok');
   if(lastParkVal)document.getElementById('mPS').textContent=lastParkVal.score.toFixed(0)+'/100';
