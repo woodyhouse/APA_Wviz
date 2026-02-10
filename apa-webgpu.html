@@ -1192,13 +1192,16 @@ async function stepOnce(){
   const pathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
     ?isPathBlockedSoon(trajectory,trajectoryIndex,planningObstacles,vp)
     :false;
+  const staticPathBlockedSoon=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
+    ?isPathBlockedSoon(trajectory,trajectoryIndex,planningObstacles.filter(isStaticObstacle),vp)
+    :false;
   const nearPathEnd=trajectory&&trajectory.length>3&&trajectoryIndex>=trajectory.length-3;
   const trackErr=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
     ?hypot(scene.ego.x-trajectory[trajectoryIndex].x,scene.ego.y-trajectory[trajectoryIndex].y)
     :0;
   const periodicReplanInt=avoidState.active?Math.max(2,cfg.replanEvery+1):Math.max(5,cfg.replanEvery+4);
   const shouldPeriodicReplan=!!trajectory&&stepsSincePlan>=periodicReplanInt&&(nearPathEnd||trackErr>0.95);
-  if(!trajectory||pathBlockedSoon||shouldPeriodicReplan){
+  if(!trajectory||pathBlockedSoon||staticPathBlockedSoon||shouldPeriodicReplan){
     planning=true;
     await computeGrid(planningObstacles,vp);
     document.getElementById('mGd').textContent=(GPU.ready?'GPU ':'CPU ')+GPU.ms.toFixed(1)+'ms';
@@ -1255,11 +1258,27 @@ function isPathBlockedSoon(path,startIdx,obs,vp){
   if(!path||!obs||!obs.length)return false;
   const from=clamp(startIdx||1,1,path.length-1);
   const to=Math.min(path.length-1,from+12);
+  const sampleSweep=(p0,p1,ob,tPred)=>{
+    const d=hypot(p1.x-p0.x,p1.y-p0.y);
+    const yawDelta=Math.abs(wrapPi(p1.yaw-p0.yaw));
+    const n=Math.max(1,Math.ceil(Math.max(d/0.22,yawDelta/deg2rad(6))));
+    for(let k=0;k<=n;k++){
+      const t=k/n;
+      const pose={
+        x:p0.x+(p1.x-p0.x)*t,
+        y:p0.y+(p1.y-p0.y)*t,
+        yaw:wrapPi(p0.yaw+wrapPi(p1.yaw-p0.yaw)*t),
+      };
+      const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
+      if(egoCol(pose,vp,pob))return true;
+    }
+    return false;
+  };
   for(let i=from;i<=to;i++){
     const tPred=(i-from+1)*vp.dt;
+    const p0=path[Math.max(from-1,i-1)],p1=path[i];
     for(const ob of obs){
-      const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
-      if(egoCol(path[i],vp,pob))return true;
+      if(sampleSweep(p0,p1,ob,tPred))return true;
     }
   }
   return false;
@@ -1274,9 +1293,16 @@ function willCollideOnNextStep(ego,nxt,vp,obs){
   const probe={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear:nxt.gear};
   const st=bicStep(probe,nxt.st,nxt.a,vp);
   const tPred=vp.dt;
+  const d=hypot(st.x-ego.x,st.y-ego.y);
+  const yawDelta=Math.abs(wrapPi(st.yaw-ego.yaw));
+  const n=Math.max(1,Math.ceil(Math.max(d/0.18,yawDelta/deg2rad(5))));
   for(const ob of obs){
     const pob={...ob,x:ob.x+(ob.vx||0)*tPred,y:ob.y+(ob.vy||0)*tPred};
-    if(egoCol(st,vp,pob))return true;
+    for(let k=0;k<=n;k++){
+      const t=k/n;
+      const pose={x:ego.x+(st.x-ego.x)*t,y:ego.y+(st.y-ego.y)*t,yaw:wrapPi(ego.yaw+wrapPi(st.yaw-ego.yaw)*t)};
+      if(egoCol(pose,vp,pob))return true;
+    }
   }
   return false;
 }
@@ -1294,6 +1320,10 @@ function engageEmergencyStop(){
 
 function isMovingObstacle(ob){
   return (Math.abs(ob.vx||0)>1e-3||Math.abs(ob.vy||0)>1e-3)&&ob.kind!=='停车';
+}
+
+function isStaticObstacle(ob){
+  return !isMovingObstacle(ob);
 }
 
 function updateTrackedMovingObstacles(perceived){
@@ -1451,18 +1481,70 @@ function pathLength(path){
   return d;
 }
 
+function getParkingPreference(slot){
+  const base={goals:[slot.goal,{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:null,preferStartGear:1,maxGearSwitch:3,mode:'free'};
+  if(!slot)return base;
+
+  if(slot.type==='parallel'){
+    // 侧方位优先倒车入库，更符合驾驶直觉
+    return {...base,goals:[{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:-1,preferStartGear:1,maxGearSwitch:2,mode:'parallel-reverse-in'};
+  }
+
+  if(slot.type==='perpendicular'){
+    // 垂直位默认倒车入库，减少硬切角与反复揉库
+    return {...base,goals:[slot.goal,{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:-1,preferStartGear:1,maxGearSwitch:2,mode:'perpendicular-reverse-in'};
+  }
+
+  if(slot.type==='angled'){
+    const rel=wrapPi(slot.goal.yaw-(scene.road?.yaw||0));
+    // 顺鱼骨：倒车入库；逆鱼骨：车头泊入
+    const isForwardFishbone=rel>=0;
+    if(isForwardFishbone)return {...base,goals:[{...slot.goal,yaw:wrapPi(slot.goal.yaw+PI)}],finalGear:-1,preferStartGear:1,maxGearSwitch:2,mode:'angled-reverse-in'};
+    return {...base,goals:[slot.goal],finalGear:1,preferStartGear:1,maxGearSwitch:1,mode:'angled-head-in'};
+  }
+
+  return base;
+}
+
+function summarizePathManeuver(path){
+  if(!path||path.length<2)return {startGear:1,tailGear:1,gearSwitch:0,reverseRatio:0};
+  let gearSwitch=0,driveN=0,revN=0;
+  for(let i=1;i<path.length;i++){
+    const g0=path[i-1].gear||1,g1=path[i].gear||1;
+    if(g0!==g1)gearSwitch++;
+    if(g1===-1)revN++;else driveN++;
+  }
+  const tail=path.slice(-Math.min(6,path.length));
+  const tailGear=tail.reduce((acc,p)=>acc+(p.gear||1),0)>=0?1:-1;
+  return {
+    startGear:path[1]?.gear||path[0]?.gear||1,
+    tailGear,
+    gearSwitch,
+    reverseRatio:revN/Math.max(1,driveN+revN),
+  };
+}
+
 function planShortestParkingPath(ego,vp,planner,obs){
-  const baseGoal=scene.slot.goal;
-  const goals=[baseGoal,{...baseGoal,yaw:wrapPi(baseGoal.yaw+PI)}];
+  const pref=getParkingPreference(scene.slot);
+  const goals=pref.goals;
   let bestRes=null,bestScore=Infinity;
   for(const g of goals){
     const localPc={...planner,goalPosTol:Math.min(0.45,planner.goalPosTol||0.6),goalYawTol:Math.min(8,planner.goalYawTol||15),wCorner:Math.max(0.8,planner.wCorner||0.8)};
     const res=planHybridAStar(ego,g,vp,localPc);
     if(!res)continue;
+
+    const man=summarizePathManeuver(res.path);
+    if(pref.finalGear!==null&&man.tailGear!==pref.finalGear)continue;
+    if(man.gearSwitch>pref.maxGearSwitch)continue;
+
     const len=pathLength(res.path);
     const eva=evaluatePlannedPath(res.path,{...scene.slot,goal:g},vp,obs);
     if(!eva.ok)continue;
-    const score=len+2.2*eva.score;
+
+    const startPenalty=(man.startGear===pref.preferStartGear)?0:1.8;
+    const switchPenalty=man.gearSwitch*0.95;
+    const reversePenalty=pref.finalGear===1?man.reverseRatio*2.5:0;
+    const score=len+2.2*eva.score+startPenalty+switchPenalty+reversePenalty;
     if(score<bestScore){bestScore=score;bestRes=res;}
   }
   return bestRes;
@@ -1876,8 +1958,8 @@ document.getElementById('btnP3').addEventListener('click',()=>{
   scene={t:0,stepN:0,road:makeTwoWaySingleLaneRoad(3.6,3.4),ego:{x:-3,y:5.4,yaw:0,v:0,gear:1},
     slot:makeSlot({x:8.1,y:2.4,yaw:ang},'angled'),
     obstacles:[
-      {id:uid(),shape:'rect',x:5.6,y:2.4,yaw:ang,w:4.5,h:1.9,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'rect',x:10.6,y:2.4,yaw:ang,w:4.5,h:1.9,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'rect',x:3.1,y:2.4,yaw:ang,w:4.5,h:1.9,vx:0,vy:0,kind:'停车'},
+      {id:uid(),shape:'rect',x:13.2,y:2.4,yaw:ang,w:4.5,h:1.9,vx:0,vy:0,kind:'停车'},
       {id:uid(),shape:'circle',x:1.8,y:7.0,yaw:0,r:0.3,vx:0.2,vy:0,kind:'行人'}]};
   applySceneMotionProfile();
   resetSim();
