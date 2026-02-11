@@ -648,7 +648,27 @@ function planHybridAStar(ego0,goal,vp,pc){
     iw=((iw%rYaw)+rYaw)%rYaw;
     return`${ix},${iy},${iw},${g}`;
   }
-  function h(x,y,yaw){return hypot(goal.x-x,goal.y-y)+0.3*Math.abs(wrapPi(goal.yaw-yaw));}
+  function h(x,y,yaw){
+    const dx=goal.x-x;
+    const dy=goal.y-y;
+    const dist=hypot(dx,dy);
+    const angErr=Math.abs(wrapPi(goal.yaw-yaw));
+
+    let cost=dist;
+
+    const angleToGoal=Math.atan2(dy,dx);
+    const approachAngleErr=Math.abs(wrapPi(angleToGoal-yaw));
+
+    if(dist<3.0)cost+=angErr*2.5;
+    else cost+=angErr*0.5;
+
+    const c=Math.cos(yaw),sg=Math.sin(yaw);
+    const latErr=Math.abs(-sg*dx+c*dy);
+    cost+=latErr*1.5;
+    cost+=approachAngleErr*0.35;
+
+    return cost;
+  }
   function isG(n){return hypot(n.x-goal.x,n.y-goal.y)<goalPosTol&&Math.abs(wrapPi(n.yaw-goal.yaw))<goalYawTol;}
 
   const nodes=[];const bestG=new Map();const closed=new Set();
@@ -776,10 +796,9 @@ function pointInObstacle(px,py,ob){
 
 class AIAgent {
   constructor(ego0,brain){
-    this.brain=brain||new NeuralNetwork(16,12,3);
+    this.brain=brain||new NeuralNetwork(17,16,3);
     this.score=0;this.alive=true;this.stepCount=0;
     this.simEgo={...ego0};
-    this.prevDist=Infinity;
     this.path=[{x:ego0.x,y:ego0.y,yaw:ego0.yaw,v:ego0.v,a:0,st:0,gear:ego0.gear,t:0}];
   }
   castRay(pose,angle,obstacles,maxD){
@@ -793,39 +812,88 @@ class AIAgent {
     return maxD;
   }
   getInputs(obstacles,goal,vp){
-    const rays=[];const numRays=12;const maxD=Math.max(8,cfg.sensor.lidarRange||20);
+    const rays=[];
+    const numRays=12;
+    const maxD=Math.max(8,cfg.sensor.lidarRange||20);
     for(let i=0;i<numRays;i++){
       const angle=this.simEgo.yaw+(i/(numRays-1)-0.5)*TAU;
       rays.push(this.castRay(this.simEgo,angle,obstacles,maxD)/maxD);
     }
-    const dx=(goal.x-this.simEgo.x)/20;
-    const dy=(goal.y-this.simEgo.y)/20;
-    const dyaw=Math.sin(goal.yaw-this.simEgo.yaw);
-    const v=this.simEgo.v/Math.max(0.1,vp.maxV);
-    return [...rays,clamp(dx,-1,1),clamp(dy,-1,1),clamp(dyaw,-1,1),clamp(v,-1,1)];
+
+    const dx=goal.x-this.simEgo.x;
+    const dy=goal.y-this.simEgo.y;
+    const c=Math.cos(-this.simEgo.yaw);
+    const sg=Math.sin(-this.simEgo.yaw);
+
+    const localX=c*dx-sg*dy;
+    const localY=sg*dx+c*dy;
+    const localYaw=wrapPi(goal.yaw-this.simEgo.yaw);
+
+    const inputLocalX=clamp(localX/15,-1,1);
+    const inputLocalY=clamp(localY/15,-1,1);
+    const inputLocalYaw=clamp(localYaw/PI,-1,1);
+    const v=clamp(this.simEgo.v/Math.max(0.1,vp.maxV),-1,1);
+
+    const dist=hypot(dx,dy);
+    const inSlot=dist<1.0?1:0;
+
+    return [...rays,inputLocalX,inputLocalY,inputLocalYaw,v,inSlot];
   }
   update(obstacles,goal,vp,maxSteps){
     if(!this.alive)return;
-    const outputs=this.brain.predict(this.getInputs(obstacles,goal,vp));
-    this.simEgo.gear=outputs[2]>=0?1:-1;
+
+    const inputs=this.getInputs(obstacles,goal,vp);
+    const outputs=this.brain.predict(inputs);
+
+    this.simEgo.gear=outputs[2]>=0.0?1:-1;
     const steer=clamp(outputs[0],-1,1)*vp.maxSteer;
     const accel=clamp(outputs[1],-1,1)*vp.maxA;
+
     this.simEgo=bicStep(this.simEgo,steer,accel,vp);
     this.stepCount++;
     this.path.push({x:this.simEgo.x,y:this.simEgo.y,yaw:this.simEgo.yaw,v:this.simEgo.v,a:accel,st:steer,gear:this.simEgo.gear,t:this.stepCount*vp.dt});
 
-    for(const ob of obstacles){if(egoCol(this.simEgo,vp,ob)){this.alive=false;this.score-=80;return;}}
-    if(this.simEgo.x<GPU.xMin||this.simEgo.x>GPU.xMax||this.simEgo.y<GPU.yMin||this.simEgo.y>GPU.yMax){this.alive=false;this.score-=70;return;}
+    for(const ob of obstacles){
+      if(egoCol(this.simEgo,vp,ob)){
+        this.alive=false;
+        this.score-=100;
+        return;
+      }
+    }
+    if(this.simEgo.x<GPU.xMin||this.simEgo.x>GPU.xMax||this.simEgo.y<GPU.yMin||this.simEgo.y>GPU.yMax){
+      this.alive=false;
+      this.score-=100;
+      return;
+    }
 
-    const d=hypot(goal.x-this.simEgo.x,goal.y-this.simEgo.y);
+    const dx=goal.x-this.simEgo.x;
+    const dy=goal.y-this.simEgo.y;
+    const dist=hypot(dx,dy);
     const yawErr=Math.abs(wrapPi(goal.yaw-this.simEgo.yaw));
-    if(Number.isFinite(this.prevDist))this.score+=(this.prevDist-d)*8;
-    this.prevDist=d;
-    this.score+=Math.max(0,3.5-d)*0.4;
-    this.score-=yawErr*0.15;
 
-    if(d<0.45&&yawErr<deg2rad(12)){this.score+=140;this.alive=false;return;}
-    if(this.stepCount>=maxSteps){this.alive=false;this.score-=d*2;}
+    this.score+=0.1;
+
+    if(dist<5.0){
+      this.score+=(5.0-dist)*0.2;
+      if(dist<2.0)this.score+=(PI-yawErr)*0.5;
+    }
+
+    if(dist<0.3&&yawErr<deg2rad(10)&&Math.abs(this.simEgo.v)<0.1){
+      this.score+=200;
+      this.score+=(1000/this.stepCount);
+      this.alive=false;
+      return;
+    }
+
+    if(this.path.length>2){
+      if(this.path[this.path.length-1].gear!==this.path[this.path.length-2].gear)this.score-=2.0;
+    }
+
+    if(this.stepCount>=maxSteps){
+      this.alive=false;
+      this.score-=dist*10;
+      this.score-=yawErr*20;
+    }
   }
 }
 
@@ -835,7 +903,7 @@ function buildGeneration(popSize,baseBrain,ego0){
   const agents=[];
   for(let i=0;i<popSize;i++){
     let brain;
-    if(baseBrain){brain=baseBrain.clone();if(i!==0)brain.mutate(0.12);}else brain=new NeuralNetwork(16,12,3);
+    if(baseBrain){brain=baseBrain.clone();if(i!==0)brain.mutate(0.12);}else brain=new NeuralNetwork(17,16,3);
     agents.push(new AIAgent(ego0,brain));
   }
   return agents;
@@ -1123,9 +1191,6 @@ async function stepOnce(){
   planningObstacles=getPlanningObstacles();
 
   const movingHit=detectMovingObstacleWithin(scene.ego,trackedMovingObs,vp,2.0);
-  const blockedByMoving=trajectory&&trajectory.length>1&&trajectoryIndex<trajectory.length
-    ?isPathBlockedSoon(trajectory,trajectoryIndex,trackedMovingObs,vp)
-    :false;
   const motionNeedsAvoid=movingHit?shouldTriggerAvoidByMotion(scene.ego,movingHit,trajectory,trajectoryIndex,vp):false;
 
   if(avoidState.mode==='none'&&!avoidState.active&&movingHit&&motionNeedsAvoid){
@@ -1143,22 +1208,27 @@ async function stepOnce(){
   if(avoidState.mode==='wait'){
     scene.ego.v=0;
     const waitT=scene.t-avoidState.startT;
-    if(!movingHit||!motionNeedsAvoid){
+
+    if(!movingHit){
       resetAvoidState();
-      trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='planning';
-    }else if((blockedByMoving&&waitT>=1.2)||waitT>=3.5){
+      trajectory=null;
+      trajectoryIndex=1;
+      stepsSincePlan=cfg.replanEvery;
+      planStatus='planning';
+      return;
+    }
+
+    if(waitT>=4.0){
       const avoidGoal=buildAvoidGoal(scene.ego,movingHit,scene.slot.goal,planningObstacles,vp);
       if(avoidGoal){
         avoidState={active:true,goal:avoidGoal,causeId:movingHit.id||null,mode:'avoid',startT:scene.t};
-        trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='avoiding';
-      }else{
-        const revGoal=buildReverseYieldGoal(scene.ego,vp,planningObstacles);
-        if(revGoal){
-          avoidState={active:true,goal:revGoal,causeId:movingHit.id||null,mode:'reverse',startT:scene.t};
-          trajectory=null;trajectoryIndex=1;stepsSincePlan=cfg.replanEvery;planStatus='avoiding';
-        }
+        trajectory=null;
+        trajectoryIndex=1;
+        stepsSincePlan=cfg.replanEvery;
+        planStatus='avoiding';
       }
     }
+
     if(avoidState.mode==='wait'&&waitT>=6.0&&!avoidState.active){
       planStatus='nopath';running=false;
       document.getElementById('btnPlay').textContent='▶ 开始';
