@@ -757,7 +757,11 @@ class NeuralNetwork {
     this.biasO=NeuralNetwork.randArray(this.outputNodes);
   }
   static randArray(n){const arr=new Float32Array(n);for(let i=0;i<n;i++)arr[i]=Math.random()*2-1;return arr;}
-  static mutateArray(arr,rate){for(let i=0;i<arr.length;i++)if(Math.random()<rate)arr[i]+=Math.random()*0.4-0.2;}
+  static mutateArray(arr,rate,sigma=0.2){
+    for(let i=0;i<arr.length;i++){
+      if(Math.random()<rate)arr[i]+=(Math.random()*2-1)*sigma;
+    }
+  }
   predict(inputArray){
     const hidden=new Float32Array(this.hiddenNodes);
     for(let i=0;i<this.hiddenNodes;i++){
@@ -778,11 +782,43 @@ class NeuralNetwork {
     nn.weightsIH.set(this.weightsIH);nn.weightsHO.set(this.weightsHO);nn.biasH.set(this.biasH);nn.biasO.set(this.biasO);
     return nn;
   }
-  mutate(rate){
-    NeuralNetwork.mutateArray(this.weightsIH,rate);
-    NeuralNetwork.mutateArray(this.weightsHO,rate);
-    NeuralNetwork.mutateArray(this.biasH,rate);
-    NeuralNetwork.mutateArray(this.biasO,rate);
+  toJSON(){
+    return {
+      inputNodes:this.inputNodes,
+      hiddenNodes:this.hiddenNodes,
+      outputNodes:this.outputNodes,
+      weightsIH:Array.from(this.weightsIH),
+      weightsHO:Array.from(this.weightsHO),
+      biasH:Array.from(this.biasH),
+      biasO:Array.from(this.biasO),
+    };
+  }
+  static fromJSON(j){
+    const nn=new NeuralNetwork(j.inputNodes,j.hiddenNodes,j.outputNodes);
+    nn.weightsIH.set(j.weightsIH);
+    nn.weightsHO.set(j.weightsHO);
+    nn.biasH.set(j.biasH);
+    nn.biasO.set(j.biasO);
+    return nn;
+  }
+  static crossover(a,b){
+    const child=a.clone();
+    const mix=(dst,src)=>{
+      for(let i=0;i<dst.length;i++){
+        if(Math.random()<0.5)dst[i]=src[i];
+      }
+    };
+    mix(child.weightsIH,b.weightsIH);
+    mix(child.weightsHO,b.weightsHO);
+    mix(child.biasH,b.biasH);
+    mix(child.biasO,b.biasO);
+    return child;
+  }
+  mutate(rate,sigma=0.2){
+    NeuralNetwork.mutateArray(this.weightsIH,rate,sigma);
+    NeuralNetwork.mutateArray(this.weightsHO,rate,sigma);
+    NeuralNetwork.mutateArray(this.biasH,rate,sigma);
+    NeuralNetwork.mutateArray(this.biasO,rate,sigma);
   }
 }
 
@@ -897,21 +933,119 @@ class AIAgent {
   }
 }
 
-let evoState={running:false,gen:0,best:null,bestFit:-Infinity,log:[],bestBrain:null};
+const EVO_KEYS={ best:'apaEvoBestV1', elites:'apaEvoElitesV1' };
 
-function buildGeneration(popSize,baseBrain,ego0){
-  const agents=[];
-  for(let i=0;i<popSize;i++){
-    let brain;
-    if(baseBrain){brain=baseBrain.clone();if(i!==0)brain.mutate(0.12);}else brain=new NeuralNetwork(17,16,3);
-    agents.push(new AIAgent(ego0,brain));
+let evoState={
+  running:false,gen:0,log:[],
+  best:null,bestFit:-Infinity,bestBrain:null,
+  elites:[],
+  eliteK:6,
+  mutRate:0.10,
+  mutSigma:0.18,
+  evalCases:6
+};
+
+function saveEvo(){
+  try{
+    if(evoState.bestBrain){
+      localStorage.setItem(EVO_KEYS.best,JSON.stringify({
+        bestFit:evoState.bestFit,
+        bestBrain:evoState.bestBrain.toJSON(),
+        best:evoState.best
+      }));
+    }
+    if(evoState.elites?.length){
+      localStorage.setItem(EVO_KEYS.elites,JSON.stringify(evoState.elites.map(b=>b.toJSON())));
+    }
+  }catch(_){ }
+}
+function loadEvo(){
+  try{
+    const best=JSON.parse(localStorage.getItem(EVO_KEYS.best)||'null');
+    if(best?.bestBrain){
+      evoState.bestFit=best.bestFit??-Infinity;
+      evoState.bestBrain=NeuralNetwork.fromJSON(best.bestBrain);
+      evoState.best=best.best||null;
+    }
+    const elites=JSON.parse(localStorage.getItem(EVO_KEYS.elites)||'null');
+    if(Array.isArray(elites)&&elites.length){
+      evoState.elites=elites.map(NeuralNetwork.fromJSON);
+    }
+  }catch(_){ }
+}
+loadEvo();
+
+const pick=arr=>arr[(Math.random()*arr.length)|0];
+const jitter=(v,amp)=>v+(Math.random()*2-1)*amp;
+
+function makeEvalScenarios(n,vp){
+  const cases=[];
+  for(let i=0;i<n;i++){
+    const ego0={
+      ...scene.ego,
+      x:jitter(scene.ego.x,1.2),
+      y:jitter(scene.ego.y,1.2),
+      yaw:wrapPi(scene.ego.yaw+deg2rad(jitter(0,10))),
+      v:0,gear:1
+    };
+    const goal={
+      ...scene.slot.goal,
+      x:jitter(scene.slot.goal.x,0.8),
+      y:jitter(scene.slot.goal.y,0.8),
+      yaw:wrapPi(scene.slot.goal.yaw+deg2rad(jitter(0,8)))
+    };
+    let obstacles=scene.obstacles
+      .filter(()=>Math.random()>0.10)
+      .map(o=>({
+        ...o,
+        x:jitter(o.x,0.7),
+        y:jitter(o.y,0.7),
+        yaw:wrapPi((o.yaw||0)+deg2rad(jitter(0,6))),
+        vx:0,vy:0
+      }));
+    if(Math.random()<0.35){
+      obstacles.push({id:uid(),shape:'rect',
+        x:jitter(goal.x,1.6),y:jitter(goal.y,1.6),yaw:0,
+        w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'
+      });
+    }
+    cases.push({ego0,goal,obstacles});
   }
-  return agents;
+  return cases;
+}
+
+function rollout(brain,ego0,obstacles,goal,vp,maxSteps){
+  const a=new AIAgent(ego0,brain);
+  for(let frame=0;frame<maxSteps;frame++){
+    if(!a.alive)break;
+    a.update(obstacles,goal,vp,maxSteps);
+  }
+  return a;
+}
+
+function buildBrains(popSize){
+  if(!evoState.elites.length){
+    return Array.from({length:popSize},()=>new NeuralNetwork(17,16,3));
+  }
+
+  const brains=[];
+  const keep=Math.min(evoState.eliteK,evoState.elites.length,Math.max(1,Math.floor(popSize*0.12)));
+
+  for(let i=0;i<keep;i++)brains.push(evoState.elites[i].clone());
+
+  while(brains.length<popSize){
+    const pa=pick(evoState.elites),pb=pick(evoState.elites);
+    const child=NeuralNetwork.crossover(pa,pb);
+    child.mutate(evoState.mutRate,evoState.mutSigma);
+    brains.push(child);
+  }
+  return brains;
 }
 
 async function runEvolution(){
   if(evoState.running)return;
-  evoState.running=true;evoState.log=[];evoState.gen=0;evoState.best=null;evoState.bestFit=-Infinity;
+  evoState.running=true;evoState.log=[];evoState.gen=0;
+
   const logEl=document.getElementById('evoLog');
   const barEl=document.getElementById('evoBar');
   logEl.textContent='';barEl.style.width='0%';
@@ -919,42 +1053,84 @@ async function runEvolution(){
   const popSize=Math.max(8,+(document.getElementById('eP').value)||50);
   const maxGen=Math.max(1,+(document.getElementById('eG').value)||30);
   const vp={...cfg.vehicle};
-  const goal=scene.slot.goal;
-  const obstacles=scene.obstacles.map(ob=>({...ob,vx:0,vy:0}));
-  const ego0={...scene.ego,v:0};
+
+  const visibleGoal=scene.slot.goal;
+  const visibleObs=scene.obstacles.map(ob=>({...ob,vx:0,vy:0}));
+  const visibleEgo0={...scene.ego,v:0};
+
+  const maxSteps=Math.max(220,Math.round((cfg.planner.maxTime||25)/vp.dt));
+  let lastBest=-Infinity;
 
   for(let gen=0;gen<maxGen&&evoState.running;gen++){
     evoState.gen=gen+1;
-    const agents=buildGeneration(popSize,evoState.bestBrain,ego0);
-    const maxSteps=Math.max(220,Math.round((cfg.planner.maxTime||25)/vp.dt));
-    for(let frame=0;frame<maxSteps;frame++){
-      let anyAlive=false;
-      for(const a of agents){if(a.alive){a.update(obstacles,goal,vp,maxSteps);anyAlive=true;}}
-      if(!anyAlive)break;
+
+    const brains=buildBrains(popSize);
+    const fitness=new Array(brains.length).fill(0);
+    const cases=makeEvalScenarios(evoState.evalCases,vp);
+
+    for(const c of cases){
+      const agents=brains.map(br=>new AIAgent(c.ego0,br));
+      for(let frame=0;frame<maxSteps;frame++){
+        let any=false;
+        for(const a of agents){
+          if(a.alive){a.update(c.obstacles,c.goal,vp,maxSteps);any=true;}
+        }
+        if(!any)break;
+      }
+      for(let i=0;i<agents.length;i++)fitness[i]+=agents[i].score;
+    }
+    for(let i=0;i<fitness.length;i++)fitness[i]/=cases.length;
+
+    const idx=[...fitness.keys()].sort((i,j)=>fitness[j]-fitness[i]);
+    const bestIdx=idx[0];
+    const bestAvg=fitness[bestIdx];
+
+    evoState.elites=idx.slice(0,evoState.eliteK).map(i=>brains[i].clone());
+
+    if(bestAvg>lastBest+1e-6){
+      evoState.mutRate=clamp(evoState.mutRate*0.97,0.04,0.22);
+      evoState.mutSigma=clamp(evoState.mutSigma*0.98,0.08,0.30);
+      lastBest=bestAvg;
+    }else{
+      evoState.mutRate=clamp(evoState.mutRate*1.03,0.04,0.22);
+      evoState.mutSigma=clamp(evoState.mutSigma*1.02,0.08,0.30);
     }
 
-    agents.sort((a,b)=>b.score-a.score);
-    const best=agents[0];
-    const endPose=best.simEgo;
-    const pv=validateParking(endPose,scene.slot,vp);
-    if(best.score>evoState.bestFit){
-      evoState.bestFit=best.score;
-      evoState.bestBrain=best.brain.clone();
-      evoState.best={score:best.score,brain:evoState.bestBrain,path:best.path,parkScore:pv.score,endPose:{...endPose},generation:gen+1};
+    const ref=rollout(brains[bestIdx],visibleEgo0,visibleObs,visibleGoal,vp,maxSteps);
+    const pv=validateParking(ref.simEgo,scene.slot,vp);
+
+    if(bestAvg>evoState.bestFit){
+      evoState.bestFit=bestAvg;
+      evoState.bestBrain=brains[bestIdx].clone();
+      evoState.best={
+        avgScore:bestAvg,
+        score:ref.score,
+        brain:evoState.bestBrain,
+        path:ref.path,
+        parkScore:pv.score,
+        endPose:{...ref.simEgo},
+        generation:gen+1,
+        mutRate:evoState.mutRate,
+        mutSigma:evoState.mutSigma
+      };
+      saveEvo();
+    }else{
+      saveEvo();
     }
 
     barEl.style.width=((gen+1)/maxGen*100)+'%';
-    const msg=`G${gen+1}: score=${best.score.toFixed(1)} 停车评分=${pv.score.toFixed(0)} 距离=${hypot(goal.x-endPose.x,goal.y-endPose.y).toFixed(2)}m`;
-    evoState.log.push(msg);logEl.textContent=evoState.log.join('\n');logEl.scrollTop=logEl.scrollHeight;
+    const msg=`G${gen+1}: avg=${bestAvg.toFixed(1)} ref=${ref.score.toFixed(1)} 停车=${pv.score.toFixed(0)} mut=${evoState.mutRate.toFixed(3)}/${evoState.mutSigma.toFixed(2)}`;
+    evoState.log.push(msg);
+    logEl.textContent=evoState.log.join('\n');
+    logEl.scrollTop=logEl.scrollHeight;
     document.getElementById('mSt').textContent=`训练 G${gen+1}`;
     await new Promise(r=>setTimeout(r,0));
   }
 
-  if(evoState.best){
-    evoState.log.push(`✅ 完成! 最优分数=${evoState.bestFit.toFixed(1)} (G${evoState.best.generation})`);
-  }else{
-    evoState.log.push('⚠️ 训练中止，未获得有效策略');
-  }
+  evoState.log.push(evoState.best
+    ? `✅ 完成! 最优(平均)=${evoState.bestFit.toFixed(1)} (G${evoState.best.generation})`
+    : '⚠️ 训练中止，未获得有效策略'
+  );
   logEl.textContent=evoState.log.join('\n');
   logEl.scrollTop=logEl.scrollHeight;
   evoState.running=false;
