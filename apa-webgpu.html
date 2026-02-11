@@ -122,15 +122,12 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
    <div class="P"><label>横向容差</label><input id="iLT" type="number" step="0.01" value="0.15"><span class="U">m</span></div>
    <div class="P"><label>压线容差</label><input id="iBT" type="number" step="0.01" value="0.05"><span class="U">m</span></div>
   </div></div>
-  <div class="S"><div class="ST">⚡ 进化优化器</div><div class="C">
-   <div class="P"><label>种群</label><input id="eP" type="number" value="16"></div>
-   <div class="P"><label>代数</label><input id="eG" type="number" value="6"></div>
-   <div class="P"><label>时间权重</label><input id="ewT" type="number" step="0.1" value="1.0"></div>
-   <div class="P"><label>距离权重</label><input id="ewD" type="number" step="0.1" value="1.0"></div>
-   <div class="P"><label>揉库权重</label><input id="ewG" type="number" step="0.1" value="3.0"></div>
-   <div class="P"><label>偏差权重</label><input id="ewA" type="number" step="0.1" value="5.0"></div>
+  <div class="S"><div class="ST">🧠 神经进化控制器</div><div class="C">
+   <div class="P"><label>种群</label><input id="eP" type="number" value="50"></div>
+   <div class="P"><label>代数</label><input id="eG" type="number" value="30"></div>
+   <div style="font-size:9px;color:var(--dm);margin:3px 0 5px">输入: 12射线 + 目标dx/dy/dYaw + 速度 · 输出: 转向/油门/档位</div>
    <div class="EB"><div class="EF" id="evoBar" style="width:0%"></div></div>
-   <div class="CR"><button class="eb" id="btnEvo">⚡ 启动进化</button><button id="btnApply" style="border-color:rgba(52,211,153,.3);color:var(--ok)">✓ 应用最优</button></div>
+   <div class="CR"><button class="eb" id="btnEvo">⚡ 启动训练</button><button id="btnApply" style="border-color:rgba(52,211,153,.3);color:var(--ok)">✓ 应用最优策略</button></div>
    <div class="EL" id="evoLog"></div>
   </div></div>
   <div class="S"><div class="ST">指标</div><div class="C"><div class="MG">
@@ -730,127 +727,167 @@ function buildSpeedProfile(pn,vp,vMax){
   return pn.map((n,i)=>({t:i*dt,x:n.x,y:n.y,yaw:n.yaw,v:v[i],a:i?((v[i]-v[i-1])/dt):0,st:n.st,gear:n.gear}));
 }
 
-// ═══════════ EVOLUTION OPTIMIZER ═══════════
-// Genetic algorithm that evolves planner hyperparameters to minimize:
-// weighted sum of (total_time, total_distance, gear_switches, parking_deviation)
-let evoState={running:false,gen:0,best:null,bestFit:Infinity,log:[]};
+// ═══════════ NEUROEVOLUTION TRAINER ═══════════
+class NeuralNetwork {
+  constructor(inputNodes,hiddenNodes,outputNodes){
+    this.inputNodes=inputNodes;this.hiddenNodes=hiddenNodes;this.outputNodes=outputNodes;
+    this.weightsIH=NeuralNetwork.randArray(this.inputNodes*this.hiddenNodes);
+    this.weightsHO=NeuralNetwork.randArray(this.hiddenNodes*this.outputNodes);
+    this.biasH=NeuralNetwork.randArray(this.hiddenNodes);
+    this.biasO=NeuralNetwork.randArray(this.outputNodes);
+  }
+  static randArray(n){const arr=new Float32Array(n);for(let i=0;i<n;i++)arr[i]=Math.random()*2-1;return arr;}
+  static mutateArray(arr,rate){for(let i=0;i<arr.length;i++)if(Math.random()<rate)arr[i]+=Math.random()*0.4-0.2;}
+  predict(inputArray){
+    const hidden=new Float32Array(this.hiddenNodes);
+    for(let i=0;i<this.hiddenNodes;i++){
+      let sum=this.biasH[i];
+      for(let j=0;j<this.inputNodes;j++)sum+=inputArray[j]*this.weightsIH[j*this.hiddenNodes+i];
+      hidden[i]=Math.tanh(sum);
+    }
+    const output=new Float32Array(this.outputNodes);
+    for(let i=0;i<this.outputNodes;i++){
+      let sum=this.biasO[i];
+      for(let j=0;j<this.hiddenNodes;j++)sum+=hidden[j]*this.weightsHO[j*this.outputNodes+i];
+      output[i]=Math.tanh(sum);
+    }
+    return output;
+  }
+  clone(){
+    const nn=new NeuralNetwork(this.inputNodes,this.hiddenNodes,this.outputNodes);
+    nn.weightsIH.set(this.weightsIH);nn.weightsHO.set(this.weightsHO);nn.biasH.set(this.biasH);nn.biasO.set(this.biasO);
+    return nn;
+  }
+  mutate(rate){
+    NeuralNetwork.mutateArray(this.weightsIH,rate);
+    NeuralNetwork.mutateArray(this.weightsHO,rate);
+    NeuralNetwork.mutateArray(this.biasH,rate);
+    NeuralNetwork.mutateArray(this.biasO,rate);
+  }
+}
+
+function pointInObstacle(px,py,ob){
+  if(ob.shape==='circle')return hypot(px-ob.x,py-ob.y)<=(ob.r||0.3);
+  const c=Math.cos(-(ob.yaw||0)),s=Math.sin(-(ob.yaw||0));
+  const dx=px-ob.x,dy=py-ob.y;
+  const lx=c*dx-s*dy,ly=s*dx+c*dy;
+  return Math.abs(lx)<=((ob.w||1)/2)&&Math.abs(ly)<=((ob.h||1)/2);
+}
+
+class AIAgent {
+  constructor(ego0,brain){
+    this.brain=brain||new NeuralNetwork(16,12,3);
+    this.score=0;this.alive=true;this.stepCount=0;
+    this.simEgo={...ego0};
+    this.prevDist=Infinity;
+    this.path=[{x:ego0.x,y:ego0.y,yaw:ego0.yaw,v:ego0.v,a:0,st:0,gear:ego0.gear,t:0}];
+  }
+  castRay(pose,angle,obstacles,maxD){
+    const step=0.35;
+    const dx=Math.cos(angle),dy=Math.sin(angle);
+    for(let d=step;d<=maxD;d+=step){
+      const px=pose.x+dx*d,py=pose.y+dy*d;
+      for(const ob of obstacles){if(pointInObstacle(px,py,ob))return d;}
+      if(px<GPU.xMin||px>GPU.xMax||py<GPU.yMin||py>GPU.yMax)return d;
+    }
+    return maxD;
+  }
+  getInputs(obstacles,goal,vp){
+    const rays=[];const numRays=12;const maxD=Math.max(8,cfg.sensor.lidarRange||20);
+    for(let i=0;i<numRays;i++){
+      const angle=this.simEgo.yaw+(i/(numRays-1)-0.5)*TAU;
+      rays.push(this.castRay(this.simEgo,angle,obstacles,maxD)/maxD);
+    }
+    const dx=(goal.x-this.simEgo.x)/20;
+    const dy=(goal.y-this.simEgo.y)/20;
+    const dyaw=Math.sin(goal.yaw-this.simEgo.yaw);
+    const v=this.simEgo.v/Math.max(0.1,vp.maxV);
+    return [...rays,clamp(dx,-1,1),clamp(dy,-1,1),clamp(dyaw,-1,1),clamp(v,-1,1)];
+  }
+  update(obstacles,goal,vp,maxSteps){
+    if(!this.alive)return;
+    const outputs=this.brain.predict(this.getInputs(obstacles,goal,vp));
+    this.simEgo.gear=outputs[2]>=0?1:-1;
+    const steer=clamp(outputs[0],-1,1)*vp.maxSteer;
+    const accel=clamp(outputs[1],-1,1)*vp.maxA;
+    this.simEgo=bicStep(this.simEgo,steer,accel,vp);
+    this.stepCount++;
+    this.path.push({x:this.simEgo.x,y:this.simEgo.y,yaw:this.simEgo.yaw,v:this.simEgo.v,a:accel,st:steer,gear:this.simEgo.gear,t:this.stepCount*vp.dt});
+
+    for(const ob of obstacles){if(egoCol(this.simEgo,vp,ob)){this.alive=false;this.score-=80;return;}}
+    if(this.simEgo.x<GPU.xMin||this.simEgo.x>GPU.xMax||this.simEgo.y<GPU.yMin||this.simEgo.y>GPU.yMax){this.alive=false;this.score-=70;return;}
+
+    const d=hypot(goal.x-this.simEgo.x,goal.y-this.simEgo.y);
+    const yawErr=Math.abs(wrapPi(goal.yaw-this.simEgo.yaw));
+    if(Number.isFinite(this.prevDist))this.score+=(this.prevDist-d)*8;
+    this.prevDist=d;
+    this.score+=Math.max(0,3.5-d)*0.4;
+    this.score-=yawErr*0.15;
+
+    if(d<0.45&&yawErr<deg2rad(12)){this.score+=140;this.alive=false;return;}
+    if(this.stepCount>=maxSteps){this.alive=false;this.score-=d*2;}
+  }
+}
+
+let evoState={running:false,gen:0,best:null,bestFit:-Infinity,log:[],bestBrain:null};
+
+function buildGeneration(popSize,baseBrain,ego0){
+  const agents=[];
+  for(let i=0;i<popSize;i++){
+    let brain;
+    if(baseBrain){brain=baseBrain.clone();if(i!==0)brain.mutate(0.12);}else brain=new NeuralNetwork(16,12,3);
+    agents.push(new AIAgent(ego0,brain));
+  }
+  return agents;
+}
 
 async function runEvolution(){
   if(evoState.running)return;
-  evoState.running=true;evoState.log=[];evoState.gen=0;evoState.best=null;evoState.bestFit=Infinity;
+  evoState.running=true;evoState.log=[];evoState.gen=0;evoState.best=null;evoState.bestFit=-Infinity;
   const logEl=document.getElementById('evoLog');
   const barEl=document.getElementById('evoBar');
-  logEl.textContent='';
+  logEl.textContent='';barEl.style.width='0%';
 
-  const popSize=+(document.getElementById('eP').value)||16;
-  const maxGen=+(document.getElementById('eG').value)||6;
-  const wT=+(document.getElementById('ewT').value)||1;
-  const wD=+(document.getElementById('ewD').value)||1;
-  const wG=+(document.getElementById('ewG').value)||3;
-  const wA=+(document.getElementById('ewA').value)||5;
+  const popSize=Math.max(8,+(document.getElementById('eP').value)||50);
+  const maxGen=Math.max(1,+(document.getElementById('eG').value)||30);
+  const vp={...cfg.vehicle};
+  const goal=scene.slot.goal;
+  const obstacles=scene.obstacles.map(ob=>({...ob,vx:0,vy:0}));
+  const ego0={...scene.ego,v:0};
 
-  // Chromosome: {vPlan, wRev, wGear, wSteer, goalPosTol, goalYawTol}
-  function randChrome(){return{
-    vPlan:0.8+Math.random()*1.4,     // 0.8~2.2
-    wRev:0.5+Math.random()*4,        // 0.5~4.5
-    wGear:3+Math.random()*12,        // 3~15
-    wSteer:0.2+Math.random()*2.5,    // 0.2~2.7
-    goalPosTol:0.3+Math.random()*0.5, // 0.3~0.8
-    goalYawTol:8+Math.random()*14,    // 8~22 degrees
-  };}
-
-  function crossover(a,b){
-    const c={};
-    for(const k of Object.keys(a))c[k]=Math.random()<0.5?a[k]:b[k];
-    return c;
-  }
-  function mutate(c){
-    const m={...c};
-    const keys=Object.keys(m);
-    const k=keys[Math.floor(Math.random()*keys.length)];
-    m[k]*=(0.7+Math.random()*0.6); // ±30% mutation
-    return m;
-  }
-
-  // Evaluate one chromosome by running full simulation
-  async function evaluate(chrome){
-    const vp={...cfg.vehicle};
-    const pc={...cfg.planner,
-      vPlan:chrome.vPlan,wRev:chrome.wRev,wGear:chrome.wGear,
-      wSteer:chrome.wSteer,goalPosTol:chrome.goalPosTol,goalYawTol:deg2rad(chrome.goalYawTol)};
-
-    // Build grid once (shared across population within same generation)
-    const ego0={...scene.ego};
-    const goal=scene.slot.goal;
-
-    const result=planHybridAStar(ego0,goal,vp,pc);
-    if(!result)return{fitness:1e6,time:0,dist:0,gears:0,parkScore:0};
-
-    const path=result.path;
-    const totalTime=path.length*vp.dt;
-    let totalDist=0,gearSw=0;
-    for(let i=1;i<path.length;i++){
-      totalDist+=hypot(path[i].x-path[i-1].x,path[i].y-path[i-1].y);
-      if(path[i].gear!==path[i-1].gear)gearSw++;
-    }
-    const endPose={x:path[path.length-1].x,y:path[path.length-1].y,yaw:path[path.length-1].yaw};
-    const pv=validateParking(endPose,scene.slot,vp);
-    const deviation=100-pv.score;
-
-    const fitness=wT*totalTime+wD*totalDist+wG*gearSw+wA*deviation;
-    return{fitness,time:totalTime,dist:totalDist,gears:gearSw,parkScore:pv.score,path,chrome,result};
-  }
-
-  // Initial population
-  let pop=[];
-  for(let i=0;i<popSize;i++)pop.push(randChrome());
-
-  // Pre-compute grid (same obstacles for all evaluations)
-  await computeGrid(scene.obstacles,cfg.vehicle);
-
-  for(let gen=0;gen<maxGen;gen++){
+  for(let gen=0;gen<maxGen&&evoState.running;gen++){
     evoState.gen=gen+1;
+    const agents=buildGeneration(popSize,evoState.bestBrain,ego0);
+    const maxSteps=Math.max(220,Math.round((cfg.planner.maxTime||25)/vp.dt));
+    for(let frame=0;frame<maxSteps;frame++){
+      let anyAlive=false;
+      for(const a of agents){if(a.alive){a.update(obstacles,goal,vp,maxSteps);anyAlive=true;}}
+      if(!anyAlive)break;
+    }
+
+    agents.sort((a,b)=>b.score-a.score);
+    const best=agents[0];
+    const endPose=best.simEgo;
+    const pv=validateParking(endPose,scene.slot,vp);
+    if(best.score>evoState.bestFit){
+      evoState.bestFit=best.score;
+      evoState.bestBrain=best.brain.clone();
+      evoState.best={score:best.score,brain:evoState.bestBrain,path:best.path,parkScore:pv.score,endPose:{...endPose},generation:gen+1};
+    }
+
     barEl.style.width=((gen+1)/maxGen*100)+'%';
-
-    // Evaluate all chromosomes
-    const results=[];
-    for(const ch of pop){
-      const r=await evaluate(ch);
-      results.push(r);
-    }
-    results.sort((a,b)=>a.fitness-b.fitness);
-
-    const best=results[0];
-    const msg=`G${gen+1}: fit=${best.fitness.toFixed(1)} t=${best.time.toFixed(1)}s d=${best.dist.toFixed(1)}m 揉库=${best.gears} 评分=${best.parkScore.toFixed(0)}`;
-    evoState.log.push(msg);
-    logEl.textContent=evoState.log.join('\n');
-    logEl.scrollTop=logEl.scrollHeight;
-
-    if(best.fitness<evoState.bestFit){
-      evoState.bestFit=best.fitness;
-      evoState.best=best;
-    }
-
-    document.getElementById('mEB').textContent=`G${gen+1} ${evoState.bestFit.toFixed(1)}`;
-
-    // Selection: top 40% survive
-    const survivors=results.slice(0,Math.ceil(popSize*0.4)).map(r=>r.chrome);
-    // Breed next generation
-    pop=[];
-    for(const s of survivors)pop.push(s); // elitism
-    while(pop.length<popSize){
-      const p1=survivors[Math.floor(Math.random()*survivors.length)];
-      const p2=survivors[Math.floor(Math.random()*survivors.length)];
-      let child=crossover(p1,p2);
-      if(Math.random()<0.3)child=mutate(child);
-      pop.push(child);
-    }
-    // Yield to UI
-    await new Promise(r=>setTimeout(r,10));
+    const msg=`G${gen+1}: score=${best.score.toFixed(1)} 停车评分=${pv.score.toFixed(0)} 距离=${hypot(goal.x-endPose.x,goal.y-endPose.y).toFixed(2)}m`;
+    evoState.log.push(msg);logEl.textContent=evoState.log.join('\n');logEl.scrollTop=logEl.scrollHeight;
+    document.getElementById('mSt').textContent=`训练 G${gen+1}`;
+    await new Promise(r=>setTimeout(r,0));
   }
 
-  const msg=`✅ 完成! 最优: fit=${evoState.bestFit.toFixed(1)}`;
-  evoState.log.push(msg);logEl.textContent=evoState.log.join('\n');
+  if(evoState.best){
+    evoState.log.push(`✅ 完成! 最优分数=${evoState.bestFit.toFixed(1)} (G${evoState.best.generation})`);
+  }else{
+    evoState.log.push('⚠️ 训练中止，未获得有效策略');
+  }
+  logEl.textContent=evoState.log.join('\n');
   logEl.scrollTop=logEl.scrollHeight;
   evoState.running=false;
 }
@@ -1956,16 +1993,31 @@ document.getElementById('btnP4').addEventListener('click',()=>{
   resetSim();
 });
 
-// Evolution buttons
+// Neuroevolution buttons
 document.getElementById('btnEvo').addEventListener('click',()=>{
-  if(evoState.running){evoState.running=false;return;}
-  runEvolution();
+  const btn=document.getElementById('btnEvo');
+  if(evoState.running){
+    evoState.running=false;
+    btn.textContent='⚡ 启动训练';
+    return;
+  }
+  btn.textContent='■ 停止训练';
+  runEvolution().finally(()=>{btn.textContent='⚡ 启动训练';});
 });
 document.getElementById('btnApply').addEventListener('click',()=>{
   if(!evoState.best)return;
   const b=evoState.best;
-  if(b.path){trajectory=b.path;trajectoryIndex=1;planStatus='planning';draw();}
-  alert(`最优参数已应用:\n规划速度=${b.chrome.vPlan.toFixed(2)}\n倒车权重=${b.chrome.wRev.toFixed(2)}\n换挡权重=${b.chrome.wGear.toFixed(2)}\n评分=${b.parkScore.toFixed(0)}/100\n揉库=${b.gears}次\n距离=${b.dist.toFixed(1)}m`);
+  if(b.path&&b.path.length>1){
+    trajectory=b.path.map((p,i)=>({x:p.x,y:p.y,yaw:p.yaw,v:p.v,a:p.a,st:p.st,gear:p.gear,t:i*cfg.vehicle.dt}));
+    trajectoryIndex=1;
+    planStatus='planning';
+  }
+  alert(`最优策略已应用:
+代数=${b.generation}
+网络得分=${b.score.toFixed(1)}
+泊车评分=${b.parkScore.toFixed(0)}/100
+终点=(${b.endPose.x.toFixed(2)}, ${b.endPose.y.toFixed(2)})`);
+  draw();
 });
 
 // Toggles
