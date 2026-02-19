@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>APA — WebGPU 加速自动泊车仿真 · 进化优化 · 12USS</title>
+<title>APA WebGPU 自动泊车仿真 · 进化优化 · 12USS+LiDAR</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
@@ -36,11 +36,12 @@ border-radius:6px;border:1px solid var(--bd);background:var(--cd);color:var(--tx
 .P label{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--dm);min-width:68px}
 .P input{flex:1;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:4px;
 padding:3px 5px;font-family:'JetBrains Mono',monospace;font-size:10px;width:42px;text-align:right}
+.P input[type="range"]{padding:0;height:20px;cursor:pointer;text-align:initial}
 .P .U{font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--dm);min-width:14px}
 .MG{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px}
 .MR{display:flex;justify-content:space-between;align-items:center;font-size:10px}
 .MR .ML{color:var(--dm);font-size:9px}.MR .MV{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:10px}
-.MV.ok{color:var(--ok)}.MV.er{color:var(--er)}.MV.gp{color:var(--gp)}.MV.ev{color:var(--ev)}
+.MV.ok{color:var(--ok)}.MV.er{color:var(--er)}.MV.gp{color:var(--gp)}.MV.ev{color:var(--ev)}.MV.wn{color:var(--wn)}
 #GS{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;font-size:9px;
 font-family:'JetBrains Mono',monospace;margin-bottom:6px;border:1px solid var(--bd);background:var(--cd)}
 #GS .dt{width:7px;height:7px;border-radius:50%}
@@ -73,6 +74,8 @@ font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:5px;
 background:rgba(11,14,20,.88);border:1px solid var(--bd);backdrop-filter:blur(8px)}
 #SB.idle{color:var(--dm)}#SB.planning{color:var(--ac)}
 #SB.success{color:var(--ok);border-color:var(--ok)}#SB.nopath{color:var(--er);border-color:var(--er)}
+#SB.docking{color:var(--a2);border-color:var(--a2)}
+#SB.avoiding{color:var(--wn);border-color:var(--wn)}
 #PS{position:absolute;top:38px;right:14px;font-family:'JetBrains Mono',monospace;font-size:9px;
 padding:5px 10px;border-radius:5px;background:rgba(11,14,20,.88);border:1px solid var(--bd);
 backdrop-filter:blur(8px);display:none;line-height:1.7}
@@ -81,24 +84,25 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
 <body>
 <div id="app">
 <div id="pn">
- <div id="ph"><h1>◈ APA <span>WebGPU · 进化 · 12USS+LiDAR</span></h1></div>
+ <div id="ph"><h1>APA <span>WebGPU · 进化 · 12USS+LiDAR</span></h1></div>
  <div id="ps">
-  <div id="GS" class="off"><div class="dt"></div><span id="GL">初始化…</span><span id="GD" style="margin-left:auto;font-size:8px;color:var(--dm)"></span></div>
+  <div id="GS" class="off"><div class="dt"></div><span id="GL">初始化中...</span><span id="GD" style="margin-left:auto;font-size:8px;color:var(--dm)"></span></div>
   <div class="S"><div class="ST">工具</div><div class="C"><div class="TB" id="toolbar">
-   <button data-mode="select" class="active">⊞ 选择</button><button data-mode="ego">⊕ 车辆</button>
-   <button data-mode="rect">▪ 矩形</button><button data-mode="circle">● 圆形</button>
-   <button data-mode="dyn">◎ 动态</button><button data-mode="slot">⊟ 车位</button>
+   <button data-mode="select" class="active">选择</button><button data-mode="ego">车辆</button>
+   <button data-mode="rect">矩形</button><button data-mode="circle">圆形</button>
+   <button data-mode="dyn">动态</button><button data-mode="slot">车位</button>
   </div></div></div>
   <div class="S"><div class="ST">仿真</div><div class="C">
-   <div class="CR"><button id="btnPlay">▶ 开始</button><button id="btnStep">⏭ 单步</button><button id="btnReset">↺ 重置</button></div>
-   <div style="font-size:9px;color:var(--dm);margin-top:3px">滚轮缩放 · 空格+拖拽平移 · Del删除</div>
+   <div class="CR"><button id="btnPlay">开始</button><button id="btnStep">单步</button><button id="btnReset">重置</button></div>
+   <div class="P"><label>动画速度</label><input id="iSpeed" type="range" min="1" max="20" value="5" style="flex:1"><span class="U" id="speedVal">5x</span></div>
+   <div style="font-size:9px;color:var(--dm);margin-top:3px">滚轮缩放 · 空格+拖拽平移 · Del 删除</div>
   </div></div>
   <div class="S"><div class="ST">传感器 (LiDAR + 12×USS)</div><div class="C">
-   <div class="P"><label>LiDAR距离</label><input id="iLR" type="number" value="25"><span class="U">m</span></div>
-   <div class="P"><label>LiDAR FOV</label><input id="iLF" type="number" value="180"><span class="U">°</span></div>
-   <div class="P"><label>USS距离</label><input id="iUR" type="number" step="0.5" value="5"><span class="U">m</span></div>
-   <div class="P"><label>重规划</label><input id="iRP" type="number" value="3"><span class="U">步</span></div>
-   <div class="TG"><label>显示USS扇区</label><div id="tUSS" class="tg on"></div></div>
+   <div class="P"><label>LiDAR 距离</label><input id="iLR" type="number" value="25"><span class="U">m</span></div>
+   <div class="P"><label>LiDAR 视场</label><input id="iLF" type="number" value="180"><span class="U">°</span></div>
+   <div class="P"><label>USS 距离</label><input id="iUR" type="number" step="0.5" value="5"><span class="U">m</span></div>
+   <div class="P"><label>重规划步数</label><input id="iRP" type="number" value="3"><span class="U">步</span></div>
+   <div class="TG"><label>显示 USS 扇区</label><div id="tUSS" class="tg on"></div></div>
   </div></div>
   <div class="S"><div class="ST">车辆</div><div class="C">
    <div class="P"><label>车长</label><input id="iVL" type="number" step="0.1" value="4.6"><span class="U">m</span></div>
@@ -112,24 +116,25 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
   </div></div>
   <div class="S"><div class="ST">规划器</div><div class="C">
    <div class="P"><label>最大时间</label><input id="iPT" type="number" value="25"><span class="U">s</span></div>
+   <div class="P"><label>最大迭代</label><input id="iMI" type="number" value="3000"><span class="U">次</span></div>
    <div class="P"><label>规划速度</label><input id="iPV" type="number" step="0.5" value="1.5"><span class="U">m/s</span></div>
-   <div class="P"><label>网格精度</label><input id="iGR" type="number" step="0.05" value="0.50"><span class="U">m</span></div>
-   <div class="TG"><label>显示C-Space</label><div id="tCS" class="tg"></div></div>
+   <div class="P"><label>网格精度</label><input id="iGR" type="number" step="0.05" value="0.25"><span class="U">m</span></div>
+   <div class="TG"><label>显示 C-Space</label><div id="tCS" class="tg"></div></div>
   </div></div>
   <div class="S"><div class="ST">泊车验证</div><div class="C">
    <div class="P"><label>航向容差</label><input id="iYT" type="number" step="0.5" value="2.0"><span class="U">°</span></div>
    <div class="P"><label>横向容差</label><input id="iLT" type="number" step="0.01" value="0.15"><span class="U">m</span></div>
    <div class="P"><label>压线容差</label><input id="iBT" type="number" step="0.01" value="0.05"><span class="U">m</span></div>
   </div></div>
-  <div class="S"><div class="ST">⚡ 进化优化器</div><div class="C">
+  <div class="S"><div class="ST">进化优化器</div><div class="C">
    <div class="P"><label>种群</label><input id="eP" type="number" value="16"></div>
    <div class="P"><label>代数</label><input id="eG" type="number" value="6"></div>
    <div class="P"><label>时间权重</label><input id="ewT" type="number" step="0.1" value="1.0"></div>
    <div class="P"><label>距离权重</label><input id="ewD" type="number" step="0.1" value="1.0"></div>
-   <div class="P"><label>揉库权重</label><input id="ewG" type="number" step="0.1" value="3.0"></div>
+   <div class="P"><label>换挡权重</label><input id="ewG" type="number" step="0.1" value="3.0"></div>
    <div class="P"><label>偏差权重</label><input id="ewA" type="number" step="0.1" value="5.0"></div>
    <div class="EB"><div class="EF" id="evoBar" style="width:0%"></div></div>
-   <div class="CR"><button class="eb" id="btnEvo">⚡ 启动进化</button><button id="btnApply" style="border-color:rgba(52,211,153,.3);color:var(--ok)">✓ 应用最优</button></div>
+   <div class="CR"><button class="eb" id="btnEvo">启动进化</button><button id="btnApply" style="border-color:rgba(52,211,153,.3);color:var(--ok)">应用最优</button></div>
    <div class="EL" id="evoLog"></div>
   </div></div>
   <div class="S"><div class="ST">指标</div><div class="C"><div class="MG">
@@ -137,14 +142,14 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
    <div class="MR"><span class="ML">状态</span><span class="MV" id="mSt">空闲</span></div>
    <div class="MR"><span class="ML">换挡</span><span class="MV" id="mG">0</span></div>
    <div class="MR"><span class="ML">距离</span><span class="MV" id="mD">0.0m</span></div>
-   <div class="MR"><span class="ML">A*</span><span class="MV" id="mPl">—</span></div>
-   <div class="MR"><span class="ML">GPU网格</span><span class="MV gp" id="mGd">—</span></div>
+   <div class="MR"><span class="ML">规划</span><span class="MV" id="mPl">--</span></div>
+   <div class="MR"><span class="ML">GPU网格</span><span class="MV gp" id="mGd">--</span></div>
    <div class="MR"><span class="ML">碰撞</span><span class="MV ok" id="mCo">无</span></div>
-   <div class="MR"><span class="ML">泊车评分</span><span class="MV ev" id="mPS">—</span></div>
+   <div class="MR"><span class="ML">泊车评分</span><span class="MV ev" id="mPS">--</span></div>
   </div></div></div>
   <div class="S"><div class="ST">场景预设</div><div class="C">
-   <div class="IR"><button id="btnP1">★ 侧方位</button><button id="btnP2">★ 垂直位</button><button id="btnP3">★ 斜向位</button></div>
-   <div class="IR"><button id="btnP4">★ 压力测试</button><button id="btnExp">📋 导出</button><button id="btnImp">📥 导入</button></div>
+   <div class="IR"><button id="btnP1">侧方位</button><button id="btnP2">垂直位</button><button id="btnP3">斜向位</button></div>
+   <div class="IR"><button id="btnP4">压力测试</button><button id="btnExp">导出</button><button id="btnImp">导入</button></div>
   </div></div>
  </div>
 </div>
@@ -158,13 +163,13 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
 </div>
 <script>
 
-// ═══════════ UTILS ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?UTILS 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 const PI=Math.PI,TAU=2*PI,deg2rad=d=>d*PI/180,rad2deg=r=>r*180/PI;
 const clamp=(v,a,b)=>v<a?a:v>b?b:v,hypot=(a,b)=>Math.sqrt(a*a+b*b);
 function wrapPi(a){a%=TAU;if(a>PI)a-=TAU;if(a<=-PI)a+=TAU;return a;}
 let _uid=0;function uid(){return'o'+(++_uid);}
 
-// ═══════════ WEBGPU C-SPACE ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?WEBGPU C-SPACE 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 const GPU={device:null,ready:false,pipeline:null,bgl:null,MAX_OBS:48,
   xMin:-15,yMin:-10,xMax:35,yMax:25,step:0.25,nYaw:36,
   nX:0,nY:0,total:0,pBuf:null,oBuf:null,outB:null,rdB:null,grid:null,ms:0};
@@ -226,11 +231,11 @@ async function initGPU(){
   GPU.grid=new Uint32Array(GPU.total);
   const el=document.getElementById('GS'),lb=document.getElementById('GL'),dt=document.getElementById('GD');
   dt.textContent=`${(GPU.total/1000)|0}K cells`;
-  document.getElementById('mGd').textContent='—';
-  if(!navigator.gpu){lb.textContent='WebGPU不可用 (CPU回退)';return;}
+  document.getElementById('mGd').textContent='--';
+  if(!navigator.gpu){lb.textContent='WebGPU 不可用（CPU 回退）';return;}
   try{
     GPU.adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
-    if(!GPU.adapter){lb.textContent='无GPU适配器';return;}
+    if(!GPU.adapter){lb.textContent='未找到 GPU 适配器';return;}
     GPU.device=await GPU.adapter.requestDevice();
     const md=GPU.device.createShaderModule({code:WGSL});
     GPU.bgl=GPU.device.createBindGroupLayout({entries:[
@@ -246,9 +251,9 @@ async function initGPU(){
     GPU.rdB=GPU.device.createBuffer({size:GPU.total*4,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
     GPU.ready=true;
     const info=await GPU.adapter.requestAdapterInfo().catch(()=>({}));
-    el.className='on';lb.textContent=info.description||'WebGPU 已激活';
-    dt.textContent=`${(GPU.total/1000)|0}K · 4090`;
-  }catch(e){console.warn(e);lb.textContent='GPU初始化失败';}
+    el.className='on';lb.textContent=info.description||'WebGPU 已启用';
+    dt.textContent=`${(GPU.total/1000)|0}K 路 4090`;
+  }catch(e){console.warn(e);lb.textContent='GPU 初始化失败';}
 }
 
 async function computeGrid(obs,vp){
@@ -301,7 +306,7 @@ function gridLK(x,y,yaw){
   return GPU.grid[ix*GPU.nY*GPU.nYaw+iy*GPU.nYaw+iw];
 }
 
-// ═══════════ CPU COLLISION ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?CPU COLLISION 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 function cpuRC(rx,ry,ra,rw,rh,cx,cy,cr){
   const dx=cx-rx,dy=cy-ry,c=Math.cos(-ra),s=Math.sin(-ra);
   const lx=c*dx-s*dy,ly=s*dx+c*dy;
@@ -326,7 +331,7 @@ function egoCol(pose,vp,ob){
   return cpuSAT(pose.x,pose.y,pose.yaw,ew,eh,ob.x,ob.y,ob.yaw||0,ob.w||1,ob.h||1);
 }
 
-// ═══════════ BICYCLE MODEL ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?BICYCLE MODEL 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 function bicStep(st,steer,a,vp){
   const dt=vp.dt;a=clamp(a,-vp.maxA,vp.maxA);
   let v=clamp(st.v+a*dt,-vp.maxV,vp.maxV);
@@ -336,8 +341,7 @@ function bicStep(st,steer,a,vp){
     yaw:wrapPi(st.yaw+yr*dt),v,gear:st.gear};
 }
 
-// ═══════════ 12-USS SENSOR LAYOUT ═══════════
-// Industry standard: 4 front, 4 rear, 2 left side, 2 right side
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?12-USS SENSOR LAYOUT 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?// Industry standard: 4 front, 4 rear, 2 left side, 2 right side
 // Positions relative to vehicle center, angles relative to vehicle heading
 function getUSSLayout(vp){
   const L=vp.length,W=vp.width,fo=vp.frontOverhang,ro=vp.rearOverhang;
@@ -407,8 +411,503 @@ function getPerceivedObs(){
   return out;
 }
 
-// ═══════════ PARKING VALIDATION ═══════════
-// Returns {pass, score, yawErr, latErr, minLineGap, details}
+function lerpAngle(a,b,t){return wrapPi(a+wrapPi(b-a)*t);}
+
+function obstacleRadiusApprox(ob){
+  if(ob.shape==='circle')return ob.r||0.3;
+  return 0.5*hypot(ob.w||1,ob.h||1);
+}
+
+function expandObstacle(ob,margin){
+  if(margin<=0)return{...ob};
+  if(ob.shape==='circle')return{...ob,r:(ob.r||0.3)+margin};
+  return{...ob,w:(ob.w||1)+2*margin,h:(ob.h||1)+2*margin};
+}
+
+function predictObstacleAt(ob,t){
+  return{...ob,x:ob.x+(ob.vx||0)*t,y:ob.y+(ob.vy||0)*t};
+}
+
+function splitObstacles(obs){
+  const dynamic=[],statics=[];
+  for(const ob of obs){((Math.abs(ob.vx||0)+Math.abs(ob.vy||0)>1e-3)?dynamic:statics).push(ob);}
+  return{dynamic,statics};
+}
+
+function nearestTrajectoryIndex(ego,traj){
+  let bi=0,bd=1e18;
+  for(let i=0;i<traj.length;i++){
+    const d=(traj[i].x-ego.x)**2+(traj[i].y-ego.y)**2;
+    if(d<bd){bd=d;bi=i;}
+  }
+  return bi;
+}
+
+function advanceTrajectoryWindow(ego,traj){
+  while(traj&&traj.length>3){
+    const d=hypot(ego.x-traj[1].x,ego.y-traj[1].y);
+    if(d>0.22)break;
+    traj.shift();
+  }
+}
+
+function buildRefFromTrajectory(traj,ego,lookaheadDist){
+  if(!traj||traj.length<3)return null;
+  const start=nearestTrajectoryIndex(ego,traj);
+  const pts=[];let s=0;
+  for(let i=start;i<traj.length;i++){
+    const p=traj[i];
+    if(!pts.length){pts.push({x:p.x,y:p.y,s:0,gear:p.gear||1});continue;}
+    const pr=pts[pts.length-1],ds=hypot(p.x-pr.x,p.y-pr.y);
+    if(ds<0.02)continue;
+    s+=ds;pts.push({x:p.x,y:p.y,s,gear:p.gear||pr.gear||1});
+    if(s>=lookaheadDist)break;
+  }
+  if(pts.length<3)return null;
+  for(let i=0;i<pts.length-1;i++){
+    pts[i].travelYaw=Math.atan2(pts[i+1].y-pts[i].y,pts[i+1].x-pts[i].x);
+  }
+  pts[pts.length-1].travelYaw=pts[pts.length-2].travelYaw;
+  return{pts,totalS:pts[pts.length-1].s};
+}
+
+function interpRefAtS(ref,s){
+  const pts=ref.pts;
+  if(s<=0)return{...pts[0]};
+  if(s>=ref.totalS)return{...pts[pts.length-1]};
+  let i=1;
+  while(i<pts.length&&pts[i].s<s)i++;
+  const a=pts[i-1],b=pts[i],r=(s-a.s)/Math.max(1e-6,b.s-a.s);
+  return{
+    x:a.x+(b.x-a.x)*r,
+    y:a.y+(b.y-a.y)*r,
+    s,
+    travelYaw:lerpAngle(a.travelYaw,b.travelYaw,r),
+    gear:r<0.5?a.gear:b.gear
+  };
+}
+
+function projectPoseToRef(ego,ref,moveGear){
+  let best={d2:1e18,s:0,d:0,yaw:0};
+  const pts=ref.pts;
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i],b=pts[i+1],vx=b.x-a.x,vy=b.y-a.y;
+    const l2=vx*vx+vy*vy;if(l2<1e-9)continue;
+    const t=clamp(((ego.x-a.x)*vx+(ego.y-a.y)*vy)/l2,0,1);
+    const px=a.x+vx*t,py=a.y+vy*t;
+    const dx=ego.x-px,dy=ego.y-py,d2=dx*dx+dy*dy;
+    if(d2<best.d2){
+      const yaw=Math.atan2(vy,vx);
+      best={d2,s:a.s+(b.s-a.s)*t,d:-Math.sin(yaw)*dx+Math.cos(yaw)*dy,yaw};
+    }
+  }
+  const egoTravelYaw=moveGear===1?ego.yaw:wrapPi(ego.yaw+PI);
+  const yawErr=wrapPi(egoTravelYaw-best.yaw);
+  return{
+    s:best.s,d:best.d,
+    s_d:Math.max(0.05,Math.abs(ego.v)),
+    s_dd:0,
+    d_d:Math.tan(clamp(yawErr,-1.2,1.2)),
+    d_dd:0
+  };
+}
+
+function solve2x2(a00,a01,a10,a11,b0,b1){
+  const det=a00*a11-a01*a10;
+  if(Math.abs(det)<1e-9)return[0,0];
+  return[(b0*a11-b1*a01)/det,(a00*b1-a10*b0)/det];
+}
+
+function solve3x3(A,b){
+  const m=[[A[0][0],A[0][1],A[0][2],b[0]],[A[1][0],A[1][1],A[1][2],b[1]],[A[2][0],A[2][1],A[2][2],b[2]]];
+  for(let i=0;i<3;i++){
+    let piv=i;
+    for(let r=i+1;r<3;r++)if(Math.abs(m[r][i])>Math.abs(m[piv][i]))piv=r;
+    if(Math.abs(m[piv][i])<1e-9)return[0,0,0];
+    if(piv!==i){const tmp=m[i];m[i]=m[piv];m[piv]=tmp;}
+    const inv=1/m[i][i];
+    for(let c=i;c<4;c++)m[i][c]*=inv;
+    for(let r=0;r<3;r++){
+      if(r===i)continue;
+      const f=m[r][i];
+      for(let c=i;c<4;c++)m[r][c]-=f*m[i][c];
+    }
+  }
+  return[m[0][3],m[1][3],m[2][3]];
+}
+
+class QuarticPoly{
+  constructor(xs,vxs,axs,vxe,axe,T){
+    this.a0=xs;this.a1=vxs;this.a2=axs/2;
+    const[x3,x4]=solve2x2(3*T*T,4*T*T*T,6*T,12*T*T,vxe-this.a1-2*this.a2*T,axe-2*this.a2);
+    this.a3=x3;this.a4=x4;
+  }
+  p(t){return this.a0+this.a1*t+this.a2*t*t+this.a3*t*t*t+this.a4*t*t*t*t;}
+  d1(t){return this.a1+2*this.a2*t+3*this.a3*t*t+4*this.a4*t*t*t;}
+  d2(t){return 2*this.a2+6*this.a3*t+12*this.a4*t*t;}
+  d3(t){return 6*this.a3+24*this.a4*t;}
+}
+
+class QuinticPoly{
+  constructor(xs,vxs,axs,xe,vxe,axe,T){
+    this.a0=xs;this.a1=vxs;this.a2=axs/2;
+    const T2=T*T,T3=T2*T,T4=T3*T,T5=T4*T;
+    const A=[[T3,T4,T5],[3*T2,4*T3,5*T4],[6*T,12*T2,20*T3]];
+    const B=[xe-this.a0-this.a1*T-this.a2*T2,vxe-this.a1-2*this.a2*T,axe-2*this.a2];
+    const[x3,x4,x5]=solve3x3(A,B);
+    this.a3=x3;this.a4=x4;this.a5=x5;
+  }
+  p(t){return this.a0+this.a1*t+this.a2*t*t+this.a3*t*t*t+this.a4*t*t*t*t+this.a5*t*t*t*t*t;}
+  d1(t){return this.a1+2*this.a2*t+3*this.a3*t*t+4*this.a4*t*t*t+5*this.a5*t*t*t*t;}
+  d2(t){return 2*this.a2+6*this.a3*t+12*this.a4*t*t+20*this.a5*t*t*t;}
+  d3(t){return 6*this.a3+24*this.a4*t+60*this.a5*t*t;}
+}
+
+function sampleFrenetCandidates(state,ref,baseSpeed,frCfg){
+  const candidates=[];
+  const dt=frCfg.dt;
+  const v0=clamp(baseSpeed,0.1,frCfg.maxSpeed);
+  for(let T=frCfg.minT;T<=frCfg.maxT+1e-6;T+=dt){
+    for(let k=-frCfg.nSpeedSample;k<=frCfg.nSpeedSample;k++){
+      const tv=clamp(v0+k*frCfg.dTargetSpeed,0.1,frCfg.maxSpeed);
+      const lon=new QuarticPoly(state.s,state.s_d,state.s_dd,tv,0,T);
+      const t=[],s=[],s_d=[],s_dd=[],s_ddd=[];
+      for(let tt=0;tt<=T+1e-6;tt+=dt){
+        t.push(tt);s.push(lon.p(tt));s_d.push(Math.max(0,lon.d1(tt)));s_dd.push(lon.d2(tt));s_ddd.push(lon.d3(tt));
+      }
+      for(let di=-frCfg.maxRoadWidth;di<=frCfg.maxRoadWidth+1e-6;di+=frCfg.dRoadW){
+        const lat=new QuinticPoly(state.d,state.d_d,state.d_dd,di,0,0,T);
+        const d=[],d_d=[],d_dd=[],d_ddd=[];
+        for(let i=0;i<t.length;i++){
+          const tt=t[i];d.push(lat.p(tt));d_d.push(lat.d1(tt));d_dd.push(lat.d2(tt));d_ddd.push(lat.d3(tt));
+        }
+        let Jp=0,Js=0;
+        for(let i=0;i<t.length;i++){Jp+=d_ddd[i]*d_ddd[i];Js+=s_ddd[i]*s_ddd[i];}
+        const latCost=frCfg.kJ*Jp+frCfg.kT*T+frCfg.kD*(d[d.length-1]**2);
+        const lonCost=frCfg.kJ*Js+frCfg.kT*T+frCfg.kSDot*((tv-s_d[s_d.length-1])**2);
+        const cf=frCfg.kLat*latCost+frCfg.kLon*lonCost;
+        candidates.push({t,s,s_d,s_dd,s_ddd,d,d_d,d_dd,d_ddd,cf});
+      }
+    }
+  }
+  return candidates;
+}
+
+function frenetToCartesian(cand,ref,vp,moveGear){
+  const n=cand.t.length;if(n<3)return[];
+  const x=[],y=[];
+  for(let i=0;i<n;i++){
+    const rp=interpRefAtS(ref,cand.s[i]);
+    x.push(rp.x-Math.sin(rp.travelYaw)*cand.d[i]);
+    y.push(rp.y+Math.cos(rp.travelYaw)*cand.d[i]);
+  }
+  const travelYaw=new Array(n).fill(0),curv=new Array(n).fill(0);
+  for(let i=0;i<n-1;i++)travelYaw[i]=Math.atan2(y[i+1]-y[i],x[i+1]-x[i]);
+  travelYaw[n-1]=travelYaw[n-2];
+  for(let i=1;i<n-1;i++){
+    const dyaw=wrapPi(travelYaw[i+1]-travelYaw[i-1]);
+    const ds=hypot(x[i+1]-x[i-1],y[i+1]-y[i-1]);
+    curv[i]=ds>1e-4?dyaw/ds:0;
+  }
+  curv[0]=curv[1];curv[n-1]=curv[n-2];
+  const path=[];
+  for(let i=0;i<n;i++){
+    const vMag=Math.max(0,cand.s_d[i]),aMag=cand.s_dd[i];
+    const yaw=moveGear===1?travelYaw[i]:wrapPi(travelYaw[i]+PI);
+    const steer=clamp(Math.atan((moveGear===1?1:-1)*vp.wheelbase*curv[i]),-vp.maxSteer,vp.maxSteer);
+    path.push({
+      t:cand.t[i],x:x[i],y:y[i],yaw,
+      v:moveGear===1?vMag:-vMag,
+      a:moveGear===1?aMag:-aMag,
+      st:steer,gear:moveGear,curv:curv[i],cf:cand.cf
+    });
+  }
+  return path;
+}
+
+function checkFrenetCandidate(path,obs,vp,frCfg){
+  if(!path||path.length<3)return false;
+  for(const p of path){
+    if(Math.abs(p.v)>frCfg.maxSpeed+1e-6)return false;
+    if(Math.abs(p.a)>frCfg.maxAccel+1e-6)return false;
+    if(Math.abs(p.curv)>frCfg.maxCurvature+1e-6)return false;
+    const pose={x:p.x,y:p.y,yaw:p.yaw};
+    for(const ob0 of obs){
+      const ob=expandObstacle(predictObstacleAt(ob0,p.t),frCfg.collisionBuffer||0);
+      if(egoCol(pose,vp,ob))return false;
+    }
+  }
+  return true;
+}
+
+function selectBestFrenet(valid){
+  let best=null,bestC=Infinity;
+  for(const v of valid){
+    const c=v.path[v.path.length-1].cf;
+    if(c<bestC){bestC=c;best=v;}
+  }
+  return best;
+}
+
+function planFrenetAvoidance(ego,trajectory,obs,vp,frCfg,moveGear){
+  const ref=buildRefFromTrajectory(trajectory,ego,frCfg.lookaheadDist||12);
+  if(!ref)return{path:null,candidates:0,valid:0};
+  const state=projectPoseToRef(ego,ref,moveGear);
+  const baseSpeed=Math.max(0.2,Math.abs((trajectory[1]&&trajectory[1].v)||cfg.planner.vPlan));
+  const candidates=sampleFrenetCandidates(state,ref,baseSpeed,frCfg);
+  const valid=[];
+  for(const c of candidates){
+    const path=frenetToCartesian(c,ref,vp,moveGear);
+    if(checkFrenetCandidate(path,obs,vp,frCfg))valid.push({path});
+  }
+  const best=selectBestFrenet(valid);
+  return{path:best?best.path:null,candidates:candidates.length,valid:valid.length};
+}
+
+function pathCollisionForecast(path,obs,vp,horizonSec,margin){
+  if(!path||path.length<2)return{hit:false,index:-1,time:Infinity};
+  const h=Math.max(vp.dt,horizonSec||2.0);
+  for(let i=1;i<path.length;i++){
+    const p=path[i],tt=p.t!=null?p.t:i*vp.dt;
+    if(tt>h)break;
+    const pose={x:p.x,y:p.y,yaw:p.yaw};
+    for(const ob0 of obs){
+      const ob=expandObstacle(predictObstacleAt(ob0,tt),margin||0);
+      if(egoCol(pose,vp,ob))return{hit:true,index:i,time:tt};
+    }
+  }
+  return{hit:false,index:-1,time:Infinity};
+}
+
+function spaceTimeRepairPath(basePath,obs,vp,stCfg){
+  if(!basePath||basePath.length<2)return null;
+  const n=basePath.length,dt=vp.dt;
+  const maxWait=stCfg.maxWaitSteps||10,maxSteps=stCfg.maxTimeSteps||420,waitCost=stCfg.waitCost||1.15,margin=stCfg.collisionBuffer||0;
+  const nodes=[{i:0,t:0,w:0,g:0,pi:-1}],heap=[];
+  const best=new Map(),closed=new Set();
+  best.set('0,0,0',0);
+  function hPush(f,i){heap.push({f,i});let k=heap.length-1;while(k>0){const p=(k-1)>>1;if(heap[p].f<=heap[k].f)break;[heap[p],heap[k]]=[heap[k],heap[p]];k=p;}}
+  function hPop(){if(!heap.length)return null;const t=heap[0];const l=heap.pop();if(heap.length){heap[0]=l;let i=0;for(;;){const a=2*i+1,b=a+1;let m=i;if(a<heap.length&&heap[a].f<heap[m].f)m=a;if(b<heap.length&&heap[b].f<heap[m].f)m=b;if(m===i)break;[heap[m],heap[i]]=[heap[i],heap[m]];i=m;}}return t;}
+  function stateSafe(i,t){
+    const p=basePath[Math.min(i,n-1)],pose={x:p.x,y:p.y,yaw:p.yaw},tt=t*dt;
+    for(const ob0 of obs){
+      const ob=expandObstacle(predictObstacleAt(ob0,tt),margin);
+      if(egoCol(pose,vp,ob))return false;
+    }
+    return true;
+  }
+  function h(i){return(n-1-i)*0.9;}
+  function pushNode(i,t,w,g,pi){
+    if(t>maxSteps)return;
+    i=Math.min(Math.max(i,0),n-1);
+    const key=`${i},${t},${w}`,old=best.get(key);
+    if(old!==undefined&&g>=old)return;
+    best.set(key,g);
+    const ni=nodes.length;nodes.push({i,t,w,g,pi});hPush(g+h(i),ni);
+  }
+  hPush(h(0),0);
+  let expanded=0,goalIdx=-1;
+  while(true){
+    const it=hPop();if(!it)break;
+    const ni=it.i,nn=nodes[ni],k=`${nn.i},${nn.t},${nn.w}`;
+    if(closed.has(k))continue;closed.add(k);expanded++;
+    if(!stateSafe(nn.i,nn.t))continue;
+    if(nn.i>=n-1){goalIdx=ni;break;}
+    pushNode(nn.i+1,nn.t+1,0,nn.g+1,ni);
+    if(nn.w<maxWait)pushNode(nn.i,nn.t+1,nn.w+1,nn.g+waitCost,ni);
+  }
+  if(goalIdx<0)return null;
+  const seq=[];let ci=goalIdx;
+  while(ci>=0){seq.push(nodes[ci]);ci=nodes[ci].pi;}
+  seq.reverse();
+  const out=[];
+  for(let j=0;j<seq.length;j++){
+    const n0=seq[j],src=basePath[n0.i],wait=j>0&&n0.i===seq[j-1].i;
+    out.push({...src,t:n0.t*dt,v:wait?0:(src.v||0),a:wait?0:(src.a||0)});
+  }
+  return{path:out,expanded};
+}
+
+async function planDynamicGlobalTrajectory(ego,goal,vp,pc,obs){
+  const split=splitObstacles(obs);
+  await computeGrid(split.statics,vp);
+  const base=planHybridAStar(ego,goal,vp,pc);
+  if(!base)return null;
+  let stExpanded=0;
+  if(pc.spaceTime&&pc.spaceTime.enabled&&obs.length){
+    const st=spaceTimeRepairPath(base.path,obs,vp,pc.spaceTime);
+    if(st&&st.path&&st.path.length>1){
+      stExpanded=st.expanded||0;
+      return{path:st.path,expanded:base.expanded||0,stExpanded};
+    }
+    stExpanded=st?st.expanded||0:0;
+  }
+  return{path:base.path,expanded:base.expanded||0,stExpanded};
+}
+
+function lqrGain2(A,B,Q,R){
+  let P=[[Q[0][0],Q[0][1]],[Q[1][0],Q[1][1]]],K=[0,0];
+  for(let it=0;it<40;it++){
+    const BtP=[B[0]*P[0][0]+B[1]*P[1][0],B[0]*P[0][1]+B[1]*P[1][1]];
+    const BtPB=BtP[0]*B[0]+BtP[1]*B[1];
+    const inv=1/(R+BtPB+1e-9);
+    const BtPA=[BtP[0]*A[0][0]+BtP[1]*A[1][0],BtP[0]*A[0][1]+BtP[1]*A[1][1]];
+    K=[inv*BtPA[0],inv*BtPA[1]];
+
+    const PA=[[P[0][0]*A[0][0]+P[0][1]*A[1][0],P[0][0]*A[0][1]+P[0][1]*A[1][1]],
+              [P[1][0]*A[0][0]+P[1][1]*A[1][0],P[1][0]*A[0][1]+P[1][1]*A[1][1]]];
+    const ATPA=[[A[0][0]*PA[0][0]+A[1][0]*PA[1][0],A[0][0]*PA[0][1]+A[1][0]*PA[1][1]],
+                [A[0][1]*PA[0][0]+A[1][1]*PA[1][0],A[0][1]*PA[0][1]+A[1][1]*PA[1][1]]];
+    const PB=[P[0][0]*B[0]+P[0][1]*B[1],P[1][0]*B[0]+P[1][1]*B[1]];
+    const ATPB=[A[0][0]*PB[0]+A[1][0]*PB[1],A[0][1]*PB[0]+A[1][1]*PB[1]];
+    const term=[[ATPB[0]*BtPA[0]*inv,ATPB[0]*BtPA[1]*inv],[ATPB[1]*BtPA[0]*inv,ATPB[1]*BtPA[1]*inv]];
+    P=[[ATPA[0][0]-term[0][0]+Q[0][0],ATPA[0][1]-term[0][1]+Q[0][1]],
+       [ATPA[1][0]-term[1][0]+Q[1][0],ATPA[1][1]-term[1][1]+Q[1][1]]];
+  }
+  return K;
+}
+
+function lqrTrackControl(ego,trajectory,vp,dt){
+  if(!trajectory||trajectory.length<2)return{gear:ego.gear,steer:0,accel:0};
+  const ni=nearestTrajectoryIndex(ego,trajectory);
+  const lookahead=Math.max(2,Math.min(6,Math.round(0.8/(Math.max(0.15,Math.abs(ego.v))*dt))));
+  // Clamp lookahead to not cross gear transition boundaries
+  const curGear=trajectory[ni].gear||((trajectory[ni].v||0)<0?-1:1);
+  let maxLook=ni;
+  for(let j=ni;j<=Math.min(ni+lookahead,trajectory.length-1);j++){
+    const jGear=trajectory[j].gear||((trajectory[j].v||0)<0?-1:1);
+    if(jGear!==curGear)break;
+    maxLook=j;
+  }
+  const ti=maxLook,tg=trajectory[ti];
+  const gear=curGear;
+  const travelYawT=gear===1?tg.yaw:wrapPi(tg.yaw+PI);
+  const travelYawE=gear===1?ego.yaw:wrapPi(ego.yaw+PI);
+  const eY=-Math.sin(travelYawT)*(ego.x-tg.x)+Math.cos(travelYawT)*(ego.y-tg.y);
+  const eYaw=wrapPi(travelYawE-travelYawT);
+  const vAbs=Math.max(0.2,Math.abs(tg.v||ego.v||cfg.planner.vPlan));
+  const A=[[1,vAbs*dt],[0,1]],B=[0,vAbs*dt/Math.max(0.1,vp.wheelbase)];
+  const K=lqrGain2(A,B,[[2.5,0],[0,4.0]],1.0);
+  const deltaFB=-(K[0]*eY+K[1]*eYaw);
+  const deltaFF=tg.st||0;
+  const steer=clamp(deltaFF+deltaFB,-vp.maxSteer,vp.maxSteer);
+  let vRef=(tg.v!=null)?tg.v:(gear*cfg.planner.vPlan);
+  if(Math.abs(vRef)<0.05){
+    const posErr=hypot(ego.x-tg.x,ego.y-tg.y);
+    const yawErr=Math.abs(wrapPi(travelYawE-travelYawT));
+    if(posErr>(cfg.tracking.holdPosTol||0.10)||yawErr>deg2rad(cfg.tracking.holdYawTolDeg||2.0)){
+      vRef=gear*(cfg.tracking.minCreep||0.14);
+    }
+  }
+  const accel=clamp(1.8*(vRef-ego.v),-vp.maxA,vp.maxA);
+  return{gear,steer,accel};
+}
+
+function selectDockingGear(ego,goal){
+  const toGoal=Math.atan2(goal.y-ego.y,goal.x-ego.x);
+  const aF=Math.abs(wrapPi(toGoal-ego.yaw));
+  const aR=Math.abs(wrapPi(toGoal-wrapPi(ego.yaw+PI)));
+  return aF<=aR?1:-1;
+}
+
+function moveToPoseDockingControl(ego,goal,vp,dCfg,forcedGear){
+  const dx=goal.x-ego.x,dy=goal.y-ego.y;
+  const rho=hypot(dx,dy);
+  const yawErr=wrapPi(goal.yaw-ego.yaw);
+  const gear=forcedGear===1||forcedGear===-1?forcedGear:selectDockingGear(ego,goal);
+  const travelYaw=gear===1?ego.yaw:wrapPi(ego.yaw+PI);
+  const goalTravelYaw=gear===1?goal.yaw:wrapPi(goal.yaw+PI);
+  const ux=Math.cos(goalTravelYaw),uy=Math.sin(goalTravelYaw);
+
+  // Rear-wheel feedback docking: track a short straight centerline to the slot center.
+  const approach=Math.max(0.35,Math.min(1.4,dCfg.startDist*0.9));
+  const p0={x:goal.x-ux*approach,y:goal.y-uy*approach};
+  const proj=((ego.x-p0.x)*ux+(ego.y-p0.y)*uy)/Math.max(approach,1e-6);
+  const t=clamp(proj,0,1);
+  const rx=p0.x+ux*approach*t,ry=p0.y+uy*approach*t;
+  const e=-Math.sin(goalTravelYaw)*(ego.x-rx)+Math.cos(goalTravelYaw)*(ego.y-ry);
+  const thE=wrapPi(travelYaw-goalTravelYaw);
+
+  let vMag=clamp(dCfg.kRho*rho,dCfg.minSpeed,dCfg.maxSpeed);
+  if(rho<dCfg.alignDist)vMag=Math.min(vMag,0.18);
+  let vCmd=(gear===1?1:-1)*vMag;
+  if(rho<dCfg.stopDist&&Math.abs(yawErr)<deg2rad(dCfg.stopYawDeg||1.0))vCmd=0;
+
+  // PythonRobotics rear-wheel feedback form (k=0 on straight docking line).
+  const absV=Math.abs(vCmd);
+  let omega=0;
+  if(Math.abs(thE)>1e-3){
+    omega=-(dCfg.kTheta||2.0)*absV*thE-(dCfg.kE||1.4)*absV*Math.sin(thE)*e/thE;
+  }else{
+    omega=-(dCfg.kTheta||2.0)*absV*thE-(dCfg.kE||1.4)*absV*e;
+  }
+  const vAbsDen=Math.max(Math.abs(vCmd),dCfg.vEps||0.08);
+  let rawSteer=Math.atan((vp.wheelbase*omega)/vAbsDen);
+  if(gear===-1&&(dCfg.reverseSteerMirror!==false))rawSteer=-rawSteer;
+  const steer=clamp((dCfg.steerGain||1.0)*rawSteer,-vp.maxSteer,vp.maxSteer);
+  const accel=clamp(dCfg.kV*(vCmd-ego.v),-vp.maxA,vp.maxA);
+  return{gear,steer,accel,rho,yawErr,eLat:e,eYaw:thE};
+}
+
+function dockingCollisionForecast(ego,ctrl,obs,vp,dCfg){
+  let st={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear:ctrl.gear};
+  const horizon=Math.max(vp.dt,dCfg.collisionHorizon||0.8);
+  const n=Math.max(1,Math.round(horizon/vp.dt));
+  for(let i=1;i<=n;i++){
+    st.gear=ctrl.gear;
+    st=bicStep(st,ctrl.steer,ctrl.accel,vp);
+    const tt=i*vp.dt,pose={x:st.x,y:st.y,yaw:st.yaw};
+    for(const ob0 of obs){
+      const ob=expandObstacle(predictObstacleAt(ob0,tt),dCfg.collisionBuffer||0);
+      if(egoCol(pose,vp,ob))return true;
+    }
+  }
+  return false;
+}
+
+function planDwaFallback(ego,trajectory,obs,vp,dwaCfg,moveGear){
+  if(!trajectory||trajectory.length<2)return null;
+  const dt=dwaCfg.dt||vp.dt,horizon=dwaCfg.horizon||1.2,steps=Math.max(2,Math.round(horizon/dt));
+  const nSteer=Math.max(3,dwaCfg.nSteer||7),nSpeed=Math.max(3,dwaCfg.nSpeed||5);
+  const target=trajectory[Math.min(5,trajectory.length-1)];
+  const vRef=target&&target.v!=null?target.v:(moveGear*cfg.planner.vPlan);
+  const vMin=moveGear===1?0:-vp.maxV,vMax=moveGear===1?vp.maxV:0;
+  let best=null,candidates=0,valid=0;
+
+  for(let si=0;si<nSteer;si++){
+    const sr=nSteer===1?0:(si/(nSteer-1))*2-1;
+    const steer=sr*vp.maxSteer;
+    for(let vi=0;vi<nSpeed;vi++){
+      const vr=nSpeed===1?0:(vi/(nSpeed-1));
+      const vTar=clamp(vRef+(vr-0.5)*1.4,vMin,vMax);
+      let st={x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,gear:moveGear},minClear=1e9,path=[{t:0,x:ego.x,y:ego.y,yaw:ego.yaw,v:ego.v,a:0,st:steer,gear:moveGear}],hit=false;
+      candidates++;
+      for(let k=1;k<=steps;k++){
+        const tt=k*dt,a=clamp((vTar-st.v)/dt,-vp.maxA,vp.maxA);
+        st.gear=moveGear;st=bicStep(st,steer,a,vp);
+        const pose={x:st.x,y:st.y,yaw:st.yaw};
+        for(const ob0 of obs){
+          const ob=expandObstacle(predictObstacleAt(ob0,tt),dwaCfg.collisionBuffer||0);
+          const r=obstacleRadiusApprox(ob)+0.5*hypot(vp.length,vp.width);
+          minClear=Math.min(minClear,hypot(st.x-ob.x,st.y-ob.y)-r);
+          if(egoCol(pose,vp,ob)){hit=true;break;}
+        }
+        path.push({t:tt,x:st.x,y:st.y,yaw:st.yaw,v:st.v,a,st:steer,gear:moveGear});
+        if(hit)break;
+      }
+      if(hit)continue;
+      valid++;
+      const end=path[path.length-1],travelYawEnd=moveGear===1?end.yaw:wrapPi(end.yaw+PI),travelYawTarget=moveGear===1?target.yaw:wrapPi(target.yaw+PI);
+      const dist=hypot(end.x-target.x,end.y-target.y),yawErr=Math.abs(wrapPi(travelYawEnd-travelYawTarget));
+      const score=-(dwaCfg.wDist||1.2)*dist-(dwaCfg.wYaw||0.8)*yawErr+(dwaCfg.wClear||1.6)*minClear+(dwaCfg.wSpeed||0.4)*Math.abs(end.v)-(dwaCfg.wSteer||0.2)*Math.abs(steer);
+      if(!best||score>best.score)best={score,path};
+    }
+  }
+  if(!best)return{path:null,candidates,valid};
+  return{path:best.path,candidates,valid};
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?PARKING VALIDATION 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?// Returns {pass, score, yawErr, latErr, minLineGap, details}
 function validateParking(ego,slot,vp){
   const goal=slot.goal;
   const poly=slot.poly;
@@ -426,6 +925,20 @@ function validateParking(ego,slot,vp){
   const dx=ego.x-slotCx,dy=ego.y-slotCy;
   const latErr=Math.abs(-gsin*dx+gcos*dy);
   const latTol=+document.getElementById('iLT').value||0.15;
+  const longErr=Math.abs(gcos*dx+gsin*dy);
+
+  // 2.5) Longitudinal centering error (along slot heading)
+  let sMin=Infinity,sMax=-Infinity;
+  for(const p of poly){
+    const s=gcos*p.x+gsin*p.y;
+    if(s<sMin)sMin=s;
+    if(s>sMax)sMax=s;
+  }
+  const slotLength=Math.max(0.1,sMax-sMin);
+  const longClear=Math.max(0,slotLength-vp.length);
+  const longTol=Math.max(0.10,Math.min(0.22,longClear*0.22+0.06));
+  const centerDist=hypot(dx,dy);
+  const centerTol=Math.max(0.14,Math.min(0.24,longClear*0.18+0.10));
 
   // 3) Line crossing check - all 4 corners of ego must be inside slot polygon
   const egoCorners=getEgoCorners(ego,vp);
@@ -441,17 +954,21 @@ function validateParking(ego,slot,vp){
 
   const yawPass=yawErr<=yawTol;
   const latPass=latErr<=latTol;
-  const pass=yawPass&&latPass&&linePass;
+  const longPass=longErr<=longTol;
+  const centerPass=centerDist<=centerTol;
+  const pass=yawPass&&latPass&&longPass&&centerPass&&linePass;
 
   // Score: 0~100, higher is better
   const yawScore=Math.max(0,100-rad2deg(yawErr)*20);
   const latScore=Math.max(0,100-latErr*200);
+  const longScore=Math.max(0,100-longErr*350);
+  const centerScore=Math.max(0,100-centerDist*260);
   const lineScore=Math.max(0,100-Math.max(0,-minLineGap)*500);
-  const score=(yawScore*0.3+latScore*0.3+lineScore*0.4);
+  const score=(yawScore*0.2+latScore*0.2+longScore*0.2+centerScore*0.2+lineScore*0.2);
 
-  return{pass,score,yawErr:rad2deg(yawErr),latErr,minLineGap,
-    yawPass,latPass,linePass,
-    details:`航向${rad2deg(yawErr).toFixed(1)}° 横偏${(latErr*100).toFixed(0)}cm 线距${(minLineGap*100).toFixed(0)}cm`};
+  return{pass,score,yawErr:rad2deg(yawErr),latErr,longErr,centerDist,centerTol,minLineGap,
+    yawPass,latPass,longPass,centerPass,linePass,
+    details:`航向${rad2deg(yawErr).toFixed(1)}° 横向${(latErr*100).toFixed(0)}cm 纵向${(longErr*100).toFixed(0)}cm 居中${(centerDist*100).toFixed(0)}cm 线距${(minLineGap*100).toFixed(0)}cm`};
 }
 
 function getEgoCorners(ego,vp){
@@ -492,14 +1009,315 @@ function pointToSegDist(p,a,b){
   return hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy));
 }
 
-// ═══════════ HYBRID A* (GPU ACCELERATED) ═══════════
+// Reeds-Shepp primitives (ported from PythonRobotics)
+function rsMod2pi(x){
+  let v=x%TAU;
+  if(v<-PI)v+=TAU;
+  else if(v>PI)v-=TAU;
+  return v;
+}
+
+function rsPolar(x,y){
+  return[hypot(x,y),Math.atan2(y,x)];
+}
+
+function rsTimeFlip(lengths){
+  return lengths.map(v=>-v);
+}
+
+function rsReflect(modes){
+  return modes.map(m=>m==='L'?'R':m==='R'?'L':'S');
+}
+
+function rsSetPath(paths,lengths,modes,stepSize){
+  const L=lengths.reduce((s,v)=>s+Math.abs(v),0);
+  for(const p of paths){
+    const sameType=p.modes.length===modes.length&&p.modes.every((m,i)=>m===modes[i]);
+    if(sameType&&Math.abs(p.L-L)<=stepSize)return;
+  }
+  if(L<=stepSize)return;
+  paths.push({modes:[...modes],lengths:[...lengths],L});
+}
+
+function rsLSL(x,y,phi){
+  const[u,t]=rsPolar(x-Math.sin(phi),y-1+Math.cos(phi));
+  if(0<=t&&t<=PI){
+    const v=rsMod2pi(phi-t);
+    if(0<=v&&v<=PI)return{ok:true,lengths:[t,u,v],modes:['L','S','L']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsLSR(x,y,phi){
+  let[u1,t1]=rsPolar(x+Math.sin(phi),y-1-Math.cos(phi));
+  u1*=u1;
+  if(u1>=4){
+    const u=Math.sqrt(u1-4);
+    const theta=Math.atan2(2,u);
+    const t=rsMod2pi(t1+theta);
+    const v=rsMod2pi(t-phi);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,u,v],modes:['L','S','R']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsLRL(x,y,phi){
+  const zeta=x-Math.sin(phi),eeta=y-1+Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1<=4){
+    const A=Math.acos(0.25*u1);
+    const t=rsMod2pi(A+theta+PI/2);
+    const u=rsMod2pi(PI-2*A);
+    const v=rsMod2pi(phi-t-u);
+    return{ok:true,lengths:[t,-u,v],modes:['L','R','L']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsL_RL(x,y,phi){
+  const zeta=x-Math.sin(phi),eeta=y-1+Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1<=4){
+    const A=Math.acos(0.25*u1);
+    const t=rsMod2pi(A+theta+PI/2);
+    const u=rsMod2pi(PI-2*A);
+    const v=rsMod2pi(-phi+t+u);
+    return{ok:true,lengths:[t,-u,-v],modes:['L','R','L']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsLR_L(x,y,phi){
+  const zeta=x-Math.sin(phi),eeta=y-1+Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1<=4&&u1>1e-9){
+    const u=Math.acos(1-u1*u1*0.125);
+    const A=Math.asin(clamp(2*Math.sin(u)/u1,-1,1));
+    const t=rsMod2pi(-A+theta+PI/2);
+    const v=rsMod2pi(t-u-phi);
+    return{ok:true,lengths:[t,u,-v],modes:['L','R','L']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsLR_LR(x,y,phi){
+  const zeta=x+Math.sin(phi),eeta=y-1-Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1<=2){
+    const A=Math.acos((u1+2)*0.25);
+    const t=rsMod2pi(theta+A+PI/2);
+    const u=rsMod2pi(A);
+    const v=rsMod2pi(phi-t+2*u);
+    if(t>=0&&u>=0&&v>=0)return{ok:true,lengths:[t,u,-u,-v],modes:['L','R','L','R']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsL_RL_R(x,y,phi){
+  const zeta=x+Math.sin(phi),eeta=y-1-Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  const u2=(20-u1*u1)/16;
+  if(0<=u2&&u2<=1&&u1>1e-9){
+    const u=Math.acos(u2);
+    const A=Math.asin(clamp(2*Math.sin(u)/u1,-1,1));
+    const t=rsMod2pi(theta+A+PI/2);
+    const v=rsMod2pi(t-phi);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,-u,-u,v],modes:['L','R','L','R']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsL_R90SL(x,y,phi){
+  const zeta=x-Math.sin(phi),eeta=y-1+Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1>=2){
+    const u=Math.sqrt(u1*u1-4)-2;
+    const A=Math.atan2(2,Math.sqrt(u1*u1-4));
+    const t=rsMod2pi(theta+A+PI/2);
+    const v=rsMod2pi(t-phi+PI/2);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,-PI/2,-u,-v],modes:['L','R','S','L']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsLS_R90L(x,y,phi){
+  const zeta=x-Math.sin(phi),eeta=y-1+Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1>=2){
+    const u=Math.sqrt(u1*u1-4)-2;
+    const A=Math.atan2(Math.sqrt(u1*u1-4),2);
+    const t=rsMod2pi(theta-A+PI/2);
+    const v=rsMod2pi(t-phi-PI/2);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,u,PI/2,-v],modes:['L','S','R','L']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsL_R90SR(x,y,phi){
+  const zeta=x+Math.sin(phi),eeta=y-1-Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1>=2){
+    const t=rsMod2pi(theta+PI/2);
+    const u=u1-2;
+    const v=rsMod2pi(phi-t-PI/2);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,-PI/2,-u,-v],modes:['L','R','S','R']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsLS_L90R(x,y,phi){
+  const zeta=x+Math.sin(phi),eeta=y-1-Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1>=2){
+    const t=rsMod2pi(theta);
+    const u=u1-2;
+    const v=rsMod2pi(phi-t-PI/2);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,u,PI/2,-v],modes:['L','S','L','R']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsL_R90SL90R(x,y,phi){
+  const zeta=x+Math.sin(phi),eeta=y-1-Math.cos(phi);
+  const[u1,theta]=rsPolar(zeta,eeta);
+  if(u1>=4){
+    const u=Math.sqrt(u1*u1-4)-4;
+    const A=Math.atan2(2,Math.sqrt(u1*u1-4));
+    const t=rsMod2pi(theta+A+PI/2);
+    const v=rsMod2pi(t-phi);
+    if(t>=0&&v>=0)return{ok:true,lengths:[t,-PI/2,-u,-PI/2,v],modes:['L','R','S','L','R']};
+  }
+  return{ok:false,lengths:[],modes:[]};
+}
+
+function rsGeneratePaths(q0,q1,maxCurvature,stepSize){
+  const dx=q1[0]-q0[0],dy=q1[1]-q0[1],dth=q1[2]-q0[2];
+  const c=Math.cos(q0[2]),s=Math.sin(q0[2]);
+  const x=(c*dx+s*dy)*maxCurvature;
+  const y=(-s*dx+c*dy)*maxCurvature;
+  const scaledStep=stepSize*maxCurvature;
+  const paths=[];
+  const funcs=[rsLSL,rsLSR,rsLRL,rsL_RL,rsLR_L,rsLR_LR,rsL_RL_R,rsL_R90SL,rsL_R90SR,rsLS_R90L,rsLS_L90R,rsL_R90SL90R];
+  function tooSmallSeg(lengths){
+    const total=lengths.reduce((ss,v)=>ss+Math.abs(v),0);
+    for(const d of lengths){
+      if(0.1*total<Math.abs(d)&&Math.abs(d)<scaledStep)return true;
+    }
+    return false;
+  }
+  for(const fn of funcs){
+    let r=fn(x,y,dth);
+    if(r.ok){
+      if(tooSmallSeg(r.lengths))return[];
+      rsSetPath(paths,r.lengths,r.modes,scaledStep);
+    }
+    r=fn(-x,y,-dth);
+    if(r.ok){
+      if(tooSmallSeg(r.lengths))return[];
+      rsSetPath(paths,rsTimeFlip(r.lengths),r.modes,scaledStep);
+    }
+    r=fn(x,-y,-dth);
+    if(r.ok){
+      if(tooSmallSeg(r.lengths))return[];
+      rsSetPath(paths,r.lengths,rsReflect(r.modes),scaledStep);
+    }
+    r=fn(-x,-y,dth);
+    if(r.ok){
+      if(tooSmallSeg(r.lengths))return[];
+      rsSetPath(paths,rsTimeFlip(r.lengths),rsReflect(r.modes),scaledStep);
+    }
+  }
+  return paths;
+}
+
+function rsInterpolateDists(length,stepScaled){
+  const out=[0];
+  const d=length>=0?Math.abs(stepScaled):-Math.abs(stepScaled);
+  let cur=0;
+  if(d>0){
+    while(cur+d<length-1e-9){cur+=d;out.push(cur);}
+  }else{
+    while(cur+d>length+1e-9){cur+=d;out.push(cur);}
+  }
+  if(Math.abs(out[out.length-1]-length)>1e-9)out.push(length);
+  return out;
+}
+
+function rsInterpolate(dist,length,mode,maxCurvature,originX,originY,originYaw){
+  let x,y,yaw;
+  if(mode==='S'){
+    x=originX+(dist/maxCurvature)*Math.cos(originYaw);
+    y=originY+(dist/maxCurvature)*Math.sin(originYaw);
+    yaw=originYaw;
+  }else{
+    const ldx=Math.sin(dist)/maxCurvature;
+    let ldy=0;
+    if(mode==='L'){ldy=(1-Math.cos(dist))/maxCurvature;yaw=originYaw+dist;}
+    else{ldy=(1-Math.cos(dist))/-maxCurvature;yaw=originYaw-dist;}
+    const gdx=Math.cos(-originYaw)*ldx+Math.sin(-originYaw)*ldy;
+    const gdy=-Math.sin(-originYaw)*ldx+Math.cos(-originYaw)*ldy;
+    x=originX+gdx;y=originY+gdy;
+  }
+  return{x,y,yaw,dir:length>0?1:-1};
+}
+
+function rsGenerateLocalCourse(lengths,modes,maxCurvature,stepSize){
+  const xs=[],ys=[],yaws=[],dirs=[],sampleModes=[];
+  let ox=0,oy=0,oyaw=0;
+  for(let i=0;i<lengths.length;i++){
+    const length=lengths[i],mode=modes[i];
+    const interp=rsInterpolateDists(length,stepSize*maxCurvature);
+    for(const dist of interp){
+      const p=rsInterpolate(dist,length,mode,maxCurvature,ox,oy,oyaw);
+      xs.push(p.x);ys.push(p.y);yaws.push(p.yaw);dirs.push(p.dir);sampleModes.push(mode);
+    }
+    ox=xs[xs.length-1];oy=ys[ys.length-1];oyaw=yaws[yaws.length-1];
+  }
+  return{xs,ys,yaws,dirs,sampleModes};
+}
+
+function rsCalcPaths(sx,sy,syaw,gx,gy,gyaw,maxCurvature,stepSize){
+  const q0=[sx,sy,syaw],q1=[gx,gy,gyaw];
+  const cand=rsGeneratePaths(q0,q1,maxCurvature,stepSize);
+  const out=[];
+  const c0=Math.cos(q0[2]),s0=Math.sin(q0[2]);
+  for(const cp of cand){
+    const lc=rsGenerateLocalCourse(cp.lengths,cp.modes,maxCurvature,stepSize);
+    const path={x:[],y:[],yaw:[],directions:lc.dirs,modes:[...cp.modes],sampleModes:lc.sampleModes,
+      lengths:cp.lengths.map(v=>v/maxCurvature),L:cp.L/maxCurvature};
+    for(let i=0;i<lc.xs.length;i++){
+      const ix=lc.xs[i],iy=lc.ys[i];
+      path.x.push(c0*ix-s0*iy+q0[0]);
+      path.y.push(s0*ix+c0*iy+q0[1]);
+      path.yaw.push(wrapPi(lc.yaws[i]+q0[2]));
+    }
+    out.push(path);
+  }
+  return out;
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?HYBRID A* (GPU ACCELERATED) 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 function planHybridAStar(ego0,goal,vp,pc){
-  const dt=vp.dt,SUB=3,maxIt=Math.floor(pc.maxTime/dt);
-  const rXY=pc.resXY,rYaw=pc.resYaw||36;
-  const stSet=[-vp.maxSteer,-0.5*vp.maxSteer,0,0.5*vp.maxSteer,vp.maxSteer];
+  const dt=vp.dt;
   const vPA=pc.vPlan||1.5;
-  const W_REV=pc.wRev||2,W_GEAR=pc.wGear||8,W_STEER=pc.wSteer||1;
-  const goalYawTol=deg2rad(pc.goalYawTol||15),goalPosTol=pc.goalPosTol||0.6;
+  const rXY=pc.resXY||0.25,rYaw=pc.resYaw||72;
+  const nSteer=Math.max(3,pc.motionPrimitives||7);
+  const stepLength=Math.max(vPA*dt*1.5,pc.stepLength||0.8);
+  const SUB=Math.max(1,Math.round(stepLength/Math.max(vPA*dt,0.05)));
+  const maxExpand=Math.max(pc.maxIterations||3000,Math.floor((pc.maxTime||25)/dt*120));
+  const W_H=pc.heuristicWeight??1.2;
+  const W_REV=pc.wRev??pc.reversePenalty??1.3;
+  const W_GEAR=pc.wGear??15;
+  const W_STEER_CH=pc.wSteer??pc.steerChangePenalty??0.8;
+  const W_STEER=pc.steerPenalty??0.3;
+  const goalYawTol=deg2rad(pc.goalYawTol||8),goalPosTol=pc.goalPosTol||0.35;
+  const analyticalDist=pc.analyticalDist||5;
+
+  const stSet=[];
+  for(let i=0;i<nSteer;i++){
+    const ratio=nSteer===1?0:(i/(nSteer-1))*2-1;
+    stSet.push(ratio*vp.maxSteer);
+  }
 
   function disc(x,y,yaw,g){
     const ix=Math.round(x/rXY),iy=Math.round(y/rXY);
@@ -507,19 +1325,99 @@ function planHybridAStar(ego0,goal,vp,pc){
     iw=((iw%rYaw)+rYaw)%rYaw;
     return`${ix},${iy},${iw},${g}`;
   }
-  function h(x,y,yaw){return hypot(goal.x-x,goal.y-y)+0.3*Math.abs(wrapPi(goal.yaw-yaw));}
-  function isG(n){return hypot(n.x-goal.x,n.y-goal.y)<goalPosTol&&Math.abs(wrapPi(n.yaw-goal.yaw))<goalYawTol;}
+  function h(x,y,yaw){return hypot(goal.x-x,goal.y-y)+2*Math.abs(wrapPi(goal.yaw-yaw));}
+  function isG(n,posTol=goalPosTol,yawTol=goalYawTol){
+    return hypot(n.x-goal.x,n.y-goal.y)<posTol&&Math.abs(wrapPi(n.yaw-goal.yaw))<yawTol;
+  }
+  function buildFinePath(endIdx){
+    const cp=[];let ci=endIdx;
+    while(ci>=0){cp.push(nodes[ci]);ci=nodes[ci].pi;}
+    cp.reverse();
+    if(!cp.length)return[];
+    const fp=[{x:cp[0].x,y:cp[0].y,yaw:cp[0].yaw,gear:cp[0].gear,st:cp[0].st||0}];
+    for(let i=1;i<cp.length;i++){
+      const pv=cp[i-1],steer=cp[i].st,gear=cp[i].gear;
+      let cu={x:pv.x,y:pv.y,yaw:pv.yaw,v:vPA*gear,gear};
+      for(let s=0;s<SUB;s++){
+        cu=bicStep(cu,steer,0,vp);
+        fp.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,st:steer});
+      }
+    }
+    return fp;
+  }
+  function tryAnalyticalExpansion(n,endIdx){
+    if(hypot(goal.x-n.x,goal.y-n.y)>analyticalDist)return null;
+    const rsEnable=pc.rsEnable!==false;
+    if(rsEnable){
+      const maxCurvature=Math.max(1e-4,Math.tan(vp.maxSteer)/Math.max(0.1,vp.wheelbase));
+      const rsStep=Math.max(0.08,Math.min(0.45,pc.rsStep||pc.directStep||0.25));
+      const rsGoalPosTol=Math.max(0.18,pc.rsGoalPosTol||0.28);
+      const rsGoalYawTol=Math.max(deg2rad(4),deg2rad(pc.rsGoalYawTol||6));
+      const rsPaths=rsCalcPaths(n.x,n.y,n.yaw,goal.x,goal.y,goal.yaw,maxCurvature,rsStep);
+      if(rsPaths&&rsPaths.length){
+        let bestTail=null,bestScore=Infinity;
+        for(const rp of rsPaths){
+          if(!rp.x||rp.x.length<2)continue;
+          let hit=false,tail=[],sw=0,revLen=0,totalLen=0;
+          let prevGear=n.gear;
+          for(let i=1;i<rp.x.length;i++){
+            const x=rp.x[i],y=rp.y[i],yaw=rp.yaw[i];
+            if(gridLK(x,y,yaw)){hit=true;break;}
+            const gear=rp.directions[i]>=0?1:-1;
+            if(i>1&&gear!==prevGear)sw++;
+            const ds=hypot(rp.x[i]-rp.x[i-1],rp.y[i]-rp.y[i-1]);
+            totalLen+=ds;
+            if(gear===-1)revLen+=ds;
+            const mode=(rp.sampleModes&&rp.sampleModes[i])||'S';
+            const steer=mode==='L'?vp.maxSteer:mode==='R'?-vp.maxSteer:0;
+            tail.push({x,y,yaw,gear,st:steer});
+            prevGear=gear;
+          }
+          if(hit||tail.length<2)continue;
+          const end=tail[tail.length-1];
+          if(!isG(end,Math.max(goalPosTol,rsGoalPosTol),Math.max(goalYawTol,rsGoalYawTol)))continue;
+          const score=totalLen+0.08*(pc.wGear??8)*sw+Math.max(0,(pc.wRev??1.3)-1.0)*revLen;
+          if(score<bestScore){bestScore=score;bestTail=tail;}
+        }
+        if(bestTail)return buildFinePath(endIdx).concat(bestTail);
+      }
+    }
+
+    // fallback: simple fixed-curvature push
+    const steerTry=[-vp.maxSteer,-0.5*vp.maxSteer,0,0.5*vp.maxSteer,vp.maxSteer];
+    const directSub=Math.max(1,Math.round((pc.directStep||0.3)/Math.max(vPA*dt,0.05)));
+    const maxSteps=pc.directMaxSteps||30;
+    for(const gear of[1,-1]){
+      for(const steer of steerTry){
+        let cu={x:n.x,y:n.y,yaw:n.yaw,v:vPA*gear,gear};
+        const tail=[];let hit=false;
+        for(let i=0;i<maxSteps;i++){
+          for(let s=0;s<directSub;s++){
+            cu=bicStep(cu,steer,0,vp);
+            if(gridLK(cu.x,cu.y,cu.yaw)){hit=true;break;}
+            tail.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,st:steer});
+          }
+          if(hit)break;
+          if(isG(cu,Math.max(goalPosTol,0.3),Math.max(goalYawTol,deg2rad(8)))){
+            return buildFinePath(endIdx).concat(tail);
+          }
+        }
+      }
+    }
+    return null;
+  }
 
   const nodes=[];const bestG=new Map();const closed=new Set();
-  nodes.push({x:ego0.x,y:ego0.y,yaw:ego0.yaw,gear:ego0.gear,it:0,g:0,pi:-1,st:0});
-  bestG.set(disc(ego0.x,ego0.y,ego0.yaw,ego0.gear),0);
+  const startGear=ego0.gear===-1?-1:1;
+  nodes.push({x:ego0.x,y:ego0.y,yaw:ego0.yaw,gear:startGear,g:0,pi:-1,st:0});
+  bestG.set(disc(ego0.x,ego0.y,ego0.yaw,startGear),0);
 
   // Binary min-heap
   const heap=[];
   function hPush(f,i){heap.push({f,i});let k=heap.length-1;while(k>0){const p=(k-1)>>1;if(heap[p].f<=heap[k].f)break;[heap[p],heap[k]]=[heap[k],heap[p]];k=p;}}
   function hPop(){if(!heap.length)return null;const t=heap[0];const l=heap.pop();if(heap.length){heap[0]=l;let i=0;for(;;){const a=2*i+1,b=a+1;let m=i;if(a<heap.length&&heap[a].f<heap[m].f)m=a;if(b<heap.length&&heap[b].f<heap[m].f)m=b;if(m===i)break;[heap[m],heap[i]]=[heap[i],heap[m]];i=m;}}return t;}
 
-  hPush(h(ego0.x,ego0.y,ego0.yaw),0);
+  hPush(W_H*h(ego0.x,ego0.y,ego0.yaw),0);
   let exp=0;
 
   while(true){
@@ -527,23 +1425,17 @@ function planHybridAStar(ego0,goal,vp,pc){
     const ni=it.i,n=nodes[ni];
     const nK=disc(n.x,n.y,n.yaw,n.gear);
     if(closed.has(nK))continue;closed.add(nK);exp++;
-    if(exp>60000)break;
+    if(exp>maxExpand)break;
 
     if(isG(n)){
-      // Reconstruct coarse path then interpolate substeps
-      const cp=[];let ci=ni;while(ci>=0){cp.push(nodes[ci]);ci=nodes[ci].pi;}cp.reverse();
-      const fp=[cp[0]];
-      for(let i=1;i<cp.length;i++){
-        const pv=cp[i-1],steer=cp[i].st,gear=cp[i].gear;
-        let cu={x:pv.x,y:pv.y,yaw:pv.yaw,v:vPA*gear,gear};
-        for(let s=0;s<SUB;s++){
-          cu=bicStep(cu,steer,0,vp);
-          fp.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,it:pv.it+s+1,st:steer});
-        }
-      }
+      const fp=buildFinePath(ni);
       return{path:buildSpeedProfile(fp,vp,vPA),expanded:exp};
     }
-    if(n.it>=maxIt)continue;
+
+    const analytic=tryAnalyticalExpansion(n,ni);
+    if(analytic){
+      return{path:buildSpeedProfile(analytic,vp,vPA),expanded:exp};
+    }
 
     for(const gear of[1,-1]){
       for(const steer of stSet){
@@ -558,16 +1450,17 @@ function planHybridAStar(ego0,goal,vp,pc){
         if(closed.has(k2))continue;
         const sl=hypot(cu.x-n.x,cu.y-n.y);
         let cost=sl;
-        if(gear===-1)cost+=W_REV*sl;
+        if(gear===-1)cost*=W_REV;
         if(gear!==n.gear)cost+=W_GEAR;
-        cost+=W_STEER*Math.abs(steer-n.st);
+        cost+=W_STEER*Math.abs(steer);
+        cost+=W_STEER_CH*Math.abs(steer-n.st);
         const g2=n.g+cost;
         const old=bestG.get(k2);
         if(old===undefined||g2<old){
           bestG.set(k2,g2);
           const ni2=nodes.length;
-          nodes.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,it:n.it+SUB,g:g2,pi:ni,st:steer});
-          hPush(g2+h(cu.x,cu.y,cu.yaw),ni2);
+          nodes.push({x:cu.x,y:cu.y,yaw:cu.yaw,gear,g:g2,pi:ni,st:steer});
+          hPush(g2+W_H*h(cu.x,cu.y,cu.yaw),ni2);
         }
       }
     }
@@ -583,8 +1476,7 @@ function buildSpeedProfile(pn,vp,vMax){
   return pn.map((n,i)=>({t:i*dt,x:n.x,y:n.y,yaw:n.yaw,v:v[i],a:i?((v[i]-v[i-1])/dt):0,st:n.st,gear:n.gear}));
 }
 
-// ═══════════ EVOLUTION OPTIMIZER ═══════════
-// Genetic algorithm that evolves planner hyperparameters to minimize:
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?EVOLUTION OPTIMIZER 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?// Genetic algorithm that evolves planner hyperparameters to minimize:
 // weighted sum of (total_time, total_distance, gear_switches, parking_deviation)
 let evoState={running:false,gen:0,best:null,bestFit:Infinity,log:[]};
 
@@ -621,7 +1513,7 @@ async function runEvolution(){
     const m={...c};
     const keys=Object.keys(m);
     const k=keys[Math.floor(Math.random()*keys.length)];
-    m[k]*=(0.7+Math.random()*0.6); // ±30% mutation
+    m[k]*=(0.7+Math.random()*0.6); // 卤30% mutation
     return m;
   }
 
@@ -674,7 +1566,7 @@ async function runEvolution(){
     results.sort((a,b)=>a.fitness-b.fitness);
 
     const best=results[0];
-    const msg=`G${gen+1}: fit=${best.fitness.toFixed(1)} t=${best.time.toFixed(1)}s d=${best.dist.toFixed(1)}m 揉库=${best.gears} 评分=${best.parkScore.toFixed(0)}`;
+    const msg=`G${gen+1}: fit=${best.fitness.toFixed(1)} t=${best.time.toFixed(1)}s d=${best.dist.toFixed(1)}m 鎻夊簱=${best.gears} 璇勫垎=${best.parkScore.toFixed(0)}`;
     evoState.log.push(msg);
     logEl.textContent=evoState.log.join('\n');
     logEl.scrollTop=logEl.scrollHeight;
@@ -702,13 +1594,13 @@ async function runEvolution(){
     await new Promise(r=>setTimeout(r,10));
   }
 
-  const msg=`✅ 完成! 最优: fit=${evoState.bestFit.toFixed(1)}`;
+  const msg=`鉁?瀹屾垚! 鏈€浼? fit=${evoState.bestFit.toFixed(1)}`;
   evoState.log.push(msg);logEl.textContent=evoState.log.join('\n');
   logEl.scrollTop=logEl.scrollHeight;
   evoState.running=false;
 }
 
-// ═══════════ CANVAS ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?CANVAS 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1;
 function resize(){const r=canvas.parentElement.getBoundingClientRect();canvas.width=r.width*dpr;canvas.height=r.height*dpr;}
 window.addEventListener('resize',resize);resize();
@@ -717,13 +1609,31 @@ cam.ox=canvas.width/(2*dpr)-2*cam.scale;cam.oy=canvas.height/(2*dpr)+2*cam.scale
 function w2s(wx,wy){return{x:cam.ox+wx*cam.scale,y:cam.oy-wy*cam.scale};}
 function s2w(sx,sy){return{x:(sx-cam.ox)/cam.scale,y:(cam.oy-sy)/cam.scale};}
 
-// ═══════════ CONFIG ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?CONFIG 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 const cfg={
   sensor:{lidarRange:25,lidarFov:180,ussRange:5},
   vehicle:{length:4.6,width:1.9,wheelbase:2.75,frontOverhang:0.95,rearOverhang:0.90,
-    maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2},
-  planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15},
+    maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2,wheelWidth:0.25,wheelLength:0.6},
+  planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15,
+    motionPrimitives:7,stepLength:0.8,maxIterations:3000,heuristicWeight:1.2,reversePenalty:1.3,
+    steerChangePenalty:0.8,steerPenalty:0.3,analyticalDist:5,directStep:0.3,directMaxSteps:30,
+    rsEnable:true,rsStep:0.24,rsGoalPosTol:0.28,rsGoalYawTol:6,
+    spaceTime:{enabled:true,maxWaitSteps:10,maxTimeSteps:420,waitCost:1.15,collisionBuffer:0.06}},
+  frenet:{enabled:true,dt:0.2,minT:1.2,maxT:2.8,maxRoadWidth:1.6,dRoadW:0.20,nSpeedSample:3,dTargetSpeed:0.35,
+    kJ:0.1,kT:0.1,kD:0.25,kSDot:1.0,kLat:1.0,kLon:1.0,maxSpeed:3.0,maxAccel:2.5,maxCurvature:0.45,
+    collisionBuffer:0.03,lookaheadDist:14,triggerHorizon:1.4},
+  dwa:{enabled:true,horizon:1.0,dt:0.2,nSteer:9,nSpeed:7,wDist:1.5,wYaw:0.9,wClear:1.0,wSpeed:0.8,wSteer:0.15,
+    collisionBuffer:0.05},
+  pedAvoid:{enabled:true,collisionMargin:0.04,followMargin:0.16,lineTol:0.10,relaxedLineTol:0.24,relaxAfter:2.0,leaveAdvance:0.28,minFollowTime:0.7,maxFollowTime:6.0,
+    radialGain:1.8,maxRadial:0.9,lookAhead:1.0,
+    band:{enabled:true,beads:7,iters:3,keepGuide:0.35,kSpring:0.42,kAnchor:0.36,kRepel:0.25,step:0.22,maxStep:0.07,repelDist:0.55}},
+  docking:{enabled:true,startDist:1.6,exitDist:2.4,kRho:0.8,kTheta:3.2,kE:2.2,kV:2.0,maxSpeed:0.30,minSpeed:0.06,steerGain:1.45,
+    reverseSteerMirror:true,
+    vEps:0.08,alignDist:0.25,stopDist:0.10,stopYawDeg:2.0,collisionBuffer:0.08,collisionHorizon:0.8},
+  tracking:{minCreep:0.14,holdPosTol:0.10,holdYawTolDeg:2.0},
+  maxGearSwitches:12,
   replanEvery:3};
+let simSpeed=5;
 function syncCfg(){
   cfg.sensor.lidarRange=+document.getElementById('iLR').value||25;
   cfg.sensor.lidarFov=+document.getElementById('iLF').value||180;
@@ -738,60 +1648,670 @@ function syncCfg(){
   cfg.vehicle.inflation=+document.getElementById('iIF').value||0.20;
   cfg.vehicle.dt=+document.getElementById('iDT').value||0.2;
   cfg.planner.maxTime=+document.getElementById('iPT').value||25;
+  cfg.planner.maxIterations=Math.max(200,+document.getElementById('iMI').value||3000);
   cfg.planner.vPlan=+document.getElementById('iPV').value||1.5;
   cfg.planner.resXY=+document.getElementById('iGR').value||0.5;
 }
 document.querySelectorAll('#pn input').forEach(el=>el.addEventListener('input',syncCfg));syncCfg();
 
-// ═══════════ SCENE ═══════════
-function mkScene(){return{t:0,stepN:0,
-  ego:{x:2,y:4,yaw:0,v:0,gear:1},
-  slot:{poly:[{x:7.5,y:2.2},{x:14,y:2.2},{x:14,y:-0.2},{x:7.5,y:-0.2}],goal:{x:10.75,y:1.0,yaw:0},type:'parallel'},
-  obstacles:[
-    {id:uid(),shape:'rect',x:5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
-    {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
-    {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'行人'},
-    {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'}]};}
-let scene=mkScene(),running=false,trajectory=null,perceivedObs=[];
-let totalDist=0,gearSwitches=0,lastPlanMs=0,planStatus='idle',stepsSincePlan=999,simStepCount=0;
-let showCSpace=false,showUSS=true,lastParkVal=null;
+function setText(sel,text){
+  const el=document.querySelector(sel);
+  if(el)el.textContent=text;
+}
+function setInputRowLabel(id,label,unit){
+  const input=document.getElementById(id);
+  if(!input)return;
+  const row=input.closest('.P');
+  if(!row)return;
+  const lb=row.querySelector('label');
+  if(lb)lb.textContent=label;
+  if(unit!==undefined){
+    const u=row.querySelector('.U');
+    if(u)u.textContent=unit;
+  }
+}
+function setToggleLabel(id,label){
+  const tg=document.getElementById(id);
+  const row=tg&&tg.closest('.TG');
+  const lb=row&&row.querySelector('label');
+  if(lb)lb.textContent=label;
+}
+function setMetricLabel(id,label){
+  const v=document.getElementById(id);
+  const row=v&&v.closest('.MR');
+  const l=row&&row.querySelector('.ML');
+  if(l)l.textContent=label;
+}
+const KIND_TEXT_MAP={
+  '鍋滆溅':'车辆',
+  '琛屼汉':'行人',
+  '閿ユ《':'锥桶',
+  '鎶ゆ爮':'护栏',
+  '鎺ㄨ溅':'推车',
+  '闅滅':'障碍',
+  '鑷杞':'自行车',
+  'cyclist':'自行车'
+};
+function kindText(v){
+  if(!v)return'';
+  const s=String(v).trim();
+  return KIND_TEXT_MAP[s]||s;
+}
+function applyUiLocalization(){
+  document.title='APA WebGPU 自动泊车仿真 · 进化优化 · 12USS+LiDAR';
+  const h1=document.querySelector('#ph h1');
+  if(h1)h1.innerHTML='APA <span>WebGPU · 进化 · 12USS+LiDAR</span>';
 
-// ═══════════ SIMULATION STEP ═══════════
+  const secTitles=['工具','仿真','传感器 (LiDAR + 12×USS)','车辆','规划器','泊车验证','进化优化器','指标','场景预设'];
+  document.querySelectorAll('#ps .ST').forEach((el,i)=>{if(secTitles[i])el.textContent=secTitles[i];});
+
+  setText('#GL','初始化中...');
+  setText('#toolbar [data-mode=\"select\"]','选择');
+  setText('#toolbar [data-mode=\"ego\"]','车辆');
+  setText('#toolbar [data-mode=\"rect\"]','矩形');
+  setText('#toolbar [data-mode=\"circle\"]','圆形');
+  setText('#toolbar [data-mode=\"dyn\"]','动态');
+  setText('#toolbar [data-mode=\"slot\"]','车位');
+  setText('#btnPlay','开始');
+  setText('#btnStep','单步');
+  setText('#btnReset','重置');
+  setInputRowLabel('iSpeed','动画速度');
+  const speedValEl=document.getElementById('speedVal');
+  if(speedValEl)speedValEl.textContent=`${simSpeed}x`;
+  const simHint=document.getElementById('btnReset')?.closest('.C')?.querySelector('div[style]');
+  if(simHint)simHint.textContent='滚轮缩放 · 空格+拖拽平移 · Del 删除';
+
+  setInputRowLabel('iLR','LiDAR 距离','m');
+  setInputRowLabel('iLF','LiDAR 视场','°');
+  setInputRowLabel('iUR','USS 距离','m');
+  setInputRowLabel('iRP','重规划步数','步');
+  setToggleLabel('tUSS','显示 USS 扇区');
+
+  setInputRowLabel('iVL','车长','m');
+  setInputRowLabel('iVW','车宽','m');
+  setInputRowLabel('iWB','轴距','m');
+  setInputRowLabel('iFO','前悬','m');
+  setInputRowLabel('iRO','后悬','m');
+  setInputRowLabel('iMS','最大转角','°');
+  setInputRowLabel('iIF','膨胀','m');
+  setInputRowLabel('iDT','dt','s');
+
+  setInputRowLabel('iPT','最大时间','s');
+  setInputRowLabel('iMI','最大迭代','次');
+  setInputRowLabel('iPV','规划速度','m/s');
+  setInputRowLabel('iGR','网格精度','m');
+  setToggleLabel('tCS','显示 C-Space');
+
+  setInputRowLabel('iYT','航向容差','°');
+  setInputRowLabel('iLT','横向容差','m');
+  setInputRowLabel('iBT','压线容差','m');
+
+  setInputRowLabel('eP','种群');
+  setInputRowLabel('eG','代数');
+  setInputRowLabel('ewT','时间权重');
+  setInputRowLabel('ewD','距离权重');
+  setInputRowLabel('ewG','换挡权重');
+  setInputRowLabel('ewA','偏差权重');
+  setText('#btnEvo','启动进化');
+  setText('#btnApply','应用最优');
+
+  setMetricLabel('mT','时间');
+  setMetricLabel('mSt','状态');
+  setMetricLabel('mG','换挡');
+  setMetricLabel('mD','距离');
+  setMetricLabel('mPl','规划');
+  setMetricLabel('mGd','GPU网格');
+  setMetricLabel('mCo','碰撞');
+  setMetricLabel('mPS','泊车评分');
+  setText('#mSt','空闲');
+  setText('#mPl','--');
+  setText('#mGd','--');
+  setText('#mCo','无');
+  setText('#mPS','--');
+
+  setText('#btnP1','侧方位');
+  setText('#btnP2','垂直位');
+  setText('#btnP3','斜向位');
+  setText('#btnP4','压力测试');
+  setText('#btnExp','导出');
+  setText('#btnImp','导入');
+
+  const hudLb=document.querySelectorAll('#hud .lb');
+  if(hudLb[0])hudLb[0].textContent='模式';
+  if(hudLb[2])hudLb[2].textContent='步';
+  setText('#SB','空闲');
+}
+applyUiLocalization();
+
+const PEDESTRIAN_SPEED_MPS=4/3.6; // 4km/h
+const NAV_AGENT_SPEED={default:PEDESTRIAN_SPEED_MPS};  // all navigating agents: 4km/h
+const pedestrianNavState=new Map();
+
+// Kinds that navigate around vehicles (BUG2 + elastic band avoidance)
+const NAV_AGENT_KINDS=new Set(['行人','推车','自行车','cyclist']);
+function isNavigatingKind(ob){
+  if(!ob)return false;
+  const k=kindText(ob.kind);
+  return NAV_AGENT_KINDS.has(k);
+}
+
+// Effective collision radius for navigating agents (circle or rect)
+function agentRadius(ob){
+  if(ob.shape==='circle')return ob.r||0.3;
+  if(ob.shape==='rect')return 0.5*hypot(ob.w||0.6,ob.h||0.6);
+  return 0.3;
+}
+
+function normalizePedestrianSpeed(obstacles){
+  for(const ob of obstacles){
+    if(!isNavigatingAgent(ob)&&!(ob.shape==='circle'&&(ob.r||0)<=0.35))continue;
+    if(!(ob.vx||ob.vy))continue;
+    const speed=NAV_AGENT_SPEED.default;
+    const vx=ob.vx||0,vy=ob.vy||0;
+    const sp=hypot(vx,vy);
+    if(sp<1e-6){ob.vx=speed;ob.vy=0;continue;}
+    const k=speed/sp;
+    ob.vx=vx*k;ob.vy=vy*k;
+  }
+}
+
+function normVec(x,y,dx=1,dy=0){
+  const n=hypot(x,y);
+  if(n<1e-9)return{x:dx,y:dy};
+  return{x:x/n,y:y/n};
+}
+
+function isNavigatingAgent(ob){
+  if(!ob)return false;
+  // Explicitly tagged navigating kinds (行人, 推车, 自行车) — any shape/size
+  if(isNavigatingKind(ob))return true;
+  // Legacy: small moving circles are treated as pedestrians
+  if(ob.shape==='circle'&&(ob.r||0)<=0.35){
+    return(Math.abs(ob.vx||0)+Math.abs(ob.vy||0)>1e-6)||pedestrianNavState.has(ob.id);
+  }
+  return false;
+}
+// Keep old name as alias for compatibility
+const isPedestrianAgent=isNavigatingAgent;
+
+function obstacleSignedDistAndNormal(pt,ob){
+  if(ob.shape==='circle'){
+    const dx=pt.x-ob.x,dy=pt.y-ob.y,d=hypot(dx,dy);
+    const n=d>1e-6?{x:dx/d,y:dy/d}:{x:1,y:0};
+    const r=ob.r||0.3;
+    return{distance:d-r,normal:n,closest:{x:ob.x+n.x*r,y:ob.y+n.y*r}};
+  }
+  const yaw=ob.yaw||0,c=Math.cos(yaw),s=Math.sin(yaw);
+  const lx=c*(pt.x-ob.x)+s*(pt.y-ob.y);
+  const ly=-s*(pt.x-ob.x)+c*(pt.y-ob.y);
+  const hw=(ob.w||1)/2,hh=(ob.h||1)/2;
+  const cx=clamp(lx,-hw,hw),cy=clamp(ly,-hh,hh);
+  const ox=lx-cx,oy=ly-cy;
+  let dist=hypot(ox,oy),nx=0,ny=0,px=cx,py=cy;
+  if(dist>1e-6){
+    nx=ox/dist;ny=oy/dist;
+  }else{
+    const dxFace=hw-Math.abs(lx),dyFace=hh-Math.abs(ly);
+    if(dxFace<dyFace){nx=lx>=0?1:-1;ny=0;px=lx>=0?hw:-hw;py=ly;dist=-dxFace;}
+    else{nx=0;ny=ly>=0?1:-1;px=lx;py=ly>=0?hh:-hh;dist=-dyFace;}
+  }
+  const nW={x:c*nx-s*ny,y:s*nx+c*ny};
+  const pW={x:ob.x+c*px-s*py,y:ob.y+s*px+c*py};
+  return{distance:dist,normal:nW,closest:pW};
+}
+
+function getPedestrianAvoidObstacles(ped){
+  const out=[{id:'ego_vehicle',shape:'rect',x:scene.ego.x,y:scene.ego.y,yaw:scene.ego.yaw,w:cfg.vehicle.length,h:cfg.vehicle.width}];
+  for(const ob of scene.obstacles){
+    if(ob.id===ped.id)continue;
+    if(isPedestrianAgent(ob))continue;
+    if(ob.shape==='rect'){out.push(ob);continue;}
+    if(ob.shape==='circle'&&(ob.r||0)>=0.45)out.push(ob);
+  }
+  return out;
+}
+
+function mLineDist(state,p){
+  const dx=p.x-state.anchor.x,dy=p.y-state.anchor.y;
+  return Math.abs(dx*state.dir.y-dy*state.dir.x);
+}
+
+function mLineProgress(state,p){
+  const dx=p.x-state.anchor.x,dy=p.y-state.anchor.y;
+  return dx*state.dir.x+dy*state.dir.y;
+}
+
+function obstacleHalfExtentAlong(ob,dir){
+  if(!ob)return 0;
+  if(ob.shape==='circle')return ob.r||0.3;
+  const yaw=ob.yaw||0;
+  const ax={x:Math.cos(yaw),y:Math.sin(yaw)};
+  const ay={x:-Math.sin(yaw),y:Math.cos(yaw)};
+  const hw=(ob.w||1)/2,hh=(ob.h||1)/2;
+  return Math.abs(dir.x*ax.x+dir.y*ax.y)*hw+Math.abs(dir.x*ay.x+dir.y*ay.y)*hh;
+}
+
+function initPedState(ped){
+  let st=pedestrianNavState.get(ped.id);
+  const v0=normVec(ped.vx||0,ped.vy||0,1,0);
+  if(!st){
+    st={
+      mode:'go_to_goal',
+      anchor:{x:ped.x,y:ped.y},
+      dir:{x:v0.x,y:v0.y},
+      hitProgress:-Infinity,
+      followObsId:null,
+      followSide:1,
+      followTime:0,
+      band:null
+    };
+    pedestrianNavState.set(ped.id,st);
+    return st;
+  }
+  if(st.mode==='go_to_goal'){
+    const mix=normVec(st.dir.x*0.92+v0.x*0.08,st.dir.y*0.92+v0.y*0.08,st.dir.x,st.dir.y);
+    st.dir.x=mix.x;st.dir.y=mix.y;
+  }
+  return st;
+}
+
+function findPedBlockingObstacle(ped,dir,dt,obs,pCfg){
+  const speed=PEDESTRIAN_SPEED_MPS;
+  const pedR=agentRadius(ped);
+  const look=Math.max(dt,pCfg.lookAhead||1.0);
+  const n=Math.max(1,Math.round(look/dt));
+  const safe=pedR+(pCfg.collisionMargin||0.04);
+  for(let k=1;k<=n;k++){
+    const p={x:ped.x+dir.x*speed*dt*k,y:ped.y+dir.y*speed*dt*k};
+    for(const ob of obs){
+      const info=obstacleSignedDistAndNormal(p,ob);
+      if(info.distance<=safe)return{ob,info,tt:k*dt};
+    }
+  }
+  return null;
+}
+
+function selectFollowSide(routeDir,normal){
+  const left={x:-normal.y,y:normal.x};
+  const right={x:normal.y,y:-normal.x};
+  return(left.x*routeDir.x+left.y*routeDir.y)>=(right.x*routeDir.x+right.y*routeDir.y)?1:-1;
+}
+
+function bug2PedDesiredDir(ped,st,obs,dt,pCfg){
+  if(st.mode==='go_to_goal'){
+    const hit=findPedBlockingObstacle(ped,st.dir,dt,obs,pCfg);
+    if(hit){
+      st.mode='follow_boundary';
+      st.followObsId=hit.ob.id;
+      st.followSide=selectFollowSide(st.dir,hit.info.normal);
+      st.hitProgress=mLineProgress(st,{x:ped.x,y:ped.y});
+      st.followTime=0;
+      st.band=null;
+    }
+  }
+  if(st.mode!=='follow_boundary')return{x:st.dir.x,y:st.dir.y};
+  let followOb=obs.find(o=>o.id===st.followObsId)||null;
+  if(!followOb){
+    const alt=findPedBlockingObstacle(ped,st.dir,dt,obs,pCfg);
+    if(alt){
+      followOb=alt.ob;
+      st.followObsId=followOb.id;
+      st.followSide=selectFollowSide(st.dir,alt.info.normal);
+    }else{
+      st.mode='go_to_goal';
+      st.followObsId=null;
+      st.followTime=0;
+      return{x:st.dir.x,y:st.dir.y};
+    }
+  }
+  const info=obstacleSignedDistAndNormal(ped,followOb);
+  const n=info.normal;
+  const tang=st.followSide===1?{x:-n.y,y:n.x}:{x:n.y,y:-n.x};
+  const desired=agentRadius(ped)+(pCfg.followMargin||0.16);
+  const err=desired-info.distance;
+  const radial=clamp(err*(pCfg.radialGain||1.8),-(pCfg.maxRadial||0.9),(pCfg.maxRadial||0.9));
+  const raw={x:tang.x+n.x*radial,y:tang.y+n.y*radial};
+  const dir=normVec(raw.x,raw.y,tang.x,tang.y);
+  st.followTime+=dt;
+
+  const prog=mLineProgress(st,ped);
+  const minFollow=pCfg.minFollowTime||0.7;
+  const baseLineTol=pCfg.lineTol||0.10;
+  const relaxAfter=pCfg.relaxAfter||2.0;
+  const lineTolNow=st.followTime>=relaxAfter?Math.max(baseLineTol,pCfg.relaxedLineTol||0.24):baseLineTol;
+  const hitAdvance=pCfg.leaveAdvance||0.28;
+  const lineBack=mLineDist(st,ped)<=lineTolNow;
+  const passedHit=prog>=st.hitProgress+hitAdvance;
+  const obsProg=mLineProgress(st,followOb);
+  const passedObs=prog>=obsProg+obstacleHalfExtentAlong(followOb,st.dir)+hitAdvance;
+  const timeout=st.followTime>=(pCfg.maxFollowTime||6.0);
+  const canLeaveLine=(st.followTime>=minFollow)&&((lineBack&&passedHit)||passedObs||timeout);
+  if(canLeaveLine){
+    const clearAhead=!findPedBlockingObstacle(ped,st.dir,dt,obs,pCfg);
+    if(clearAhead||timeout){
+      st.mode='go_to_goal';
+      st.followObsId=null;
+      st.followTime=0;
+      st.band=null;
+      if(timeout){
+        const resume=normVec(dir.x,dir.y,st.dir.x,st.dir.y);
+        st.dir.x=resume.x;st.dir.y=resume.y;
+      }
+      return{x:st.dir.x,y:st.dir.y};
+    }
+  }
+  return dir;
+}
+
+function applyPedElasticBand(ped,st,rawDir,obs,dt,pCfg){
+  const bCfg=pCfg.band||{};
+  if(!bCfg.enabled)return rawDir;
+  const n=Math.max(4,Math.round(bCfg.beads||7));
+  const keep=clamp(bCfg.keepGuide||0.35,0,1);
+  const speed=PEDESTRIAN_SPEED_MPS;
+  const guide=new Array(n);
+  guide[0]={x:ped.x,y:ped.y};
+  for(let i=1;i<n;i++){
+    guide[i]={x:guide[i-1].x+rawDir.x*speed*dt,y:guide[i-1].y+rawDir.y*speed*dt};
+  }
+  let band;
+  if(st.band&&st.band.length===n){
+    band=new Array(n);
+    band[0]={x:guide[0].x,y:guide[0].y};
+    for(let i=1;i<n;i++){
+      band[i]={
+        x:st.band[i].x*(1-keep)+guide[i].x*keep,
+        y:st.band[i].y*(1-keep)+guide[i].y*keep
+      };
+    }
+  }else{
+    band=guide.map(p=>({x:p.x,y:p.y}));
+  }
+
+  const maxStep=Math.max(0.01,bCfg.maxStep||0.07);
+  const step=Math.max(0.05,bCfg.step||0.22);
+  const kSpring=bCfg.kSpring||0.42,kAnchor=bCfg.kAnchor||0.36,kRepel=bCfg.kRepel||0.25;
+  const repelDist=Math.max(0.05,bCfg.repelDist||0.55);
+  const safeBase=agentRadius(ped)+(pCfg.followMargin||0.16);
+  const iters=Math.max(1,Math.round(bCfg.iters||3));
+  for(let it=0;it<iters;it++){
+    for(let i=1;i<n-1;i++){
+      const p=band[i],pm=band[i-1],pn=band[i+1],g=guide[i];
+      let fx=kSpring*((pm.x+pn.x)-2*p.x)+kAnchor*(g.x-p.x);
+      let fy=kSpring*((pm.y+pn.y)-2*p.y)+kAnchor*(g.y-p.y);
+      for(const ob of obs){
+        const info=obstacleSignedDistAndNormal(p,ob);
+        const repelRange=safeBase+repelDist;
+        if(info.distance<repelRange){
+          const gain=clamp((repelRange-info.distance)/Math.max(repelRange,1e-6),0,2);
+          fx+=info.normal.x*kRepel*gain;
+          fy+=info.normal.y*kRepel*gain;
+        }
+      }
+      let dx=fx*step,dy=fy*step;
+      const mv=hypot(dx,dy);
+      if(mv>maxStep){const k=maxStep/mv;dx*=k;dy*=k;}
+      p.x+=dx;p.y+=dy;
+    }
+    band[0].x=guide[0].x;band[0].y=guide[0].y;
+    band[n-1].x=guide[n-1].x;band[n-1].y=guide[n-1].y;
+  }
+  st.band=band;
+  const d1=normVec(band[1].x-band[0].x,band[1].y-band[0].y,rawDir.x,rawDir.y);
+  return d1;
+}
+
+function moveDynamicObstacles(dt){
+  const alive=new Set(scene.obstacles.map(o=>o.id));
+  for(const id of pedestrianNavState.keys()){
+    if(!alive.has(id))pedestrianNavState.delete(id);
+  }
+  for(const ob of scene.obstacles){
+    if(!(ob.vx||ob.vy))continue;
+    if(cfg.pedAvoid.enabled&&isPedestrianAgent(ob)){
+      const st=initPedState(ob);
+      const avoidObs=getPedestrianAvoidObstacles(ob);
+      const rawDir=bug2PedDesiredDir(ob,st,avoidObs,dt,cfg.pedAvoid);
+      const dir=applyPedElasticBand(ob,st,rawDir,avoidObs,dt,cfg.pedAvoid);
+      ob.vx=dir.x*PEDESTRIAN_SPEED_MPS;
+      ob.vy=dir.y*PEDESTRIAN_SPEED_MPS;
+      ob.x+=ob.vx*dt;
+      ob.y+=ob.vy*dt;
+      // Update yaw for rect agents so they face movement direction
+      if(ob.shape==='rect')ob.yaw=Math.atan2(dir.y,dir.x);
+      continue;
+    }
+    ob.x+=(ob.vx||0)*dt;
+    ob.y+=(ob.vy||0)*dt;
+  }
+}
+
+function getUniformSlotSize(vp){
+  return{
+    length:Math.max(6.0,vp.length+1.4),
+    width:Math.max(2.5,vp.width+0.6)
+  };
+}
+
+function offsetByYaw(x,y,yaw,along,side){
+  const ux=Math.cos(yaw),uy=Math.sin(yaw),vx=-Math.sin(yaw),vy=Math.cos(yaw);
+  return{x:x+ux*along+vx*side,y:y+uy*along+vy*side};
+}
+
+function makeSlot(cx,cy,yaw,type,vp){
+  const sz=getUniformSlotSize(vp),hl=sz.length/2,hw=sz.width/2;
+  const p1=offsetByYaw(cx,cy,yaw, hl, hw);
+  const p2=offsetByYaw(cx,cy,yaw, hl,-hw);
+  const p3=offsetByYaw(cx,cy,yaw,-hl,-hw);
+  const p4=offsetByYaw(cx,cy,yaw,-hl, hw);
+  return{poly:[p1,p2,p3,p4],goal:{x:cx,y:cy,yaw},type};
+}
+
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?SCENE 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+function mkScene(){
+  const slot=makeSlot(10.75,1.0,0,'parallel',cfg.vehicle);
+  return{t:0,stepN:0,
+  ego:{x:2,y:4,yaw:0,v:0,gear:1,steer:0},
+  slot,
+  obstacles:[
+    {id:uid(),shape:'rect',x:5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'鍋滆溅'},
+    {id:uid(),shape:'rect',x:16.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'鍋滆溅'},
+    {id:uid(),shape:'circle',x:11,y:6.5,yaw:0,r:0.3,vx:-0.3,vy:-0.1,kind:'琛屼汉'},
+    {id:uid(),shape:'rect',x:3,y:-1.5,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'閿ユ《'}]};}
+let scene=mkScene(),running=false,trajectory=null,perceivedObs=[];
+let totalDist=0,gearSwitches=0,lastPlanMs=0,lastPlanExpanded=0,lastSTExpanded=0,lastAvoidMs=0,lastAvoidCandidates=0,lastAvoidValid=0,
+  planStatus='idle',stepsSincePlan=999,simStepCount=0;
+let showCSpace=false,showUSS=true,lastParkVal=null,dockingActive=false,dockingGear=1;
+let dockBlockStreak=0,lastDockRho=Infinity,dockConvergingSteps=0;
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?SIMULATION STEP 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 let planning=false;
 async function stepOnce(){
   if(planning)return;syncCfg();
-  const vp=cfg.vehicle,dt=vp.dt,goal=scene.slot.goal;
+  const vp=cfg.vehicle,dt=vp.dt,slotGoal=scene.slot.goal;
+  normalizePedestrianSpeed(scene.obstacles);
+
+  // Check gear switch limit - force accept current position if exceeded
+  const maxGS=cfg.maxGearSwitches||12;
+  if(gearSwitches>=maxGS){
+    const parkVal=validateParking(scene.ego,scene.slot,vp);
+    dockingActive=false;dockingGear=1;
+    planStatus='success';running=false;lastParkVal=parkVal;
+    scene.ego.v=0;scene.ego.steer=0;
+    document.getElementById('btnPlay').textContent='开始';
+    showParkScore(parkVal);updateMetrics();
+    console.warn(`[APA] 揉库次数达上限(${maxGS}次换挡), 强制结束. 评分=${parkVal.score.toFixed(0)}`);
+    return;
+  }
 
   // Check if parked - use strict validation
   const parkVal=validateParking(scene.ego,scene.slot,vp);
-  if(hypot(scene.ego.x-goal.x,scene.ego.y-goal.y)<0.8&&parkVal.pass){
+  if(parkVal.pass&&Math.abs(scene.ego.v)<0.06){
+    dockingActive=false;dockingGear=1;
     planStatus='success';running=false;lastParkVal=parkVal;
-    document.getElementById('btnPlay').textContent='▶ 开始';
+    document.getElementById('btnPlay').textContent='开始';
     showParkScore(parkVal);updateMetrics();return;
   }
 
   perceivedObs=getPerceivedObs();
+  const distSlotGoal=hypot(scene.ego.x-slotGoal.x,scene.ego.y-slotGoal.y);
+  if(!dockingActive&&trajectory&&trajectory.length<4&&distSlotGoal>0.55){
+    trajectory=null;
+  }
+  if(cfg.docking.enabled){
+    if(!dockingActive&&distSlotGoal<=cfg.docking.startDist){
+      dockingActive=true;dockingGear=selectDockingGear(scene.ego,slotGoal);
+      lastDockRho=distSlotGoal;dockConvergingSteps=0;
+    }
+    if(dockingActive&&distSlotGoal>cfg.docking.exitDist){dockingActive=false;dockingGear=1;lastDockRho=Infinity;dockConvergingSteps=0;}
+    if(dockingActive){
+      const dockCtrl=moveToPoseDockingControl(scene.ego,slotGoal,vp,cfg.docking,dockingGear);
+      const curRho=dockCtrl.rho!=null?dockCtrl.rho:distSlotGoal;
+      // Track convergence: is docking making progress?
+      const converging=curRho<lastDockRho-0.005;
+      if(converging)dockConvergingSteps++;
+      else dockConvergingSteps=Math.max(0,dockConvergingSteps-1);
+      lastDockRho=curRho;
+      // Collision forecast with adaptive tolerance:
+      // If actively converging toward goal, use relaxed collision check (shorter horizon)
+      const isCommitted=dockConvergingSteps>=2||curRho<0.5;
+      let blocked=false;
+      if(isCommitted){
+        // Relaxed check: shorter horizon + smaller buffer for committed docking
+        const relaxedCfg={...cfg.docking,collisionHorizon:Math.min(0.4,cfg.docking.collisionHorizon),collisionBuffer:0.02};
+        blocked=dockingCollisionForecast(scene.ego,dockCtrl,perceivedObs,vp,relaxedCfg);
+      }else{
+        blocked=dockingCollisionForecast(scene.ego,dockCtrl,perceivedObs,vp,cfg.docking);
+      }
+      if(blocked){
+        dockBlockStreak++;
+        dockingActive=false;dockingGear=1;lastDockRho=Infinity;dockConvergingSteps=0;
+        trajectory=null;
+        stepsSincePlan=cfg.replanEvery;
+        scene.ego.v=0;scene.ego.steer=0;
+        planStatus='avoiding';
+      }
+      if(dockingActive){
+        const pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+        scene.ego.gear=dockCtrl.gear;
+        scene.ego.steer=dockCtrl.steer;
+        const st=bicStep(scene.ego,dockCtrl.steer,dockCtrl.accel,vp);
+        scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
+        totalDist+=hypot(st.x-pX,st.y-pY);
+        if(pG!==dockCtrl.gear)gearSwitches++;
+        dockBlockStreak=0;
+        planStatus='docking';
+        moveDynamicObstacles(dt);
+        scene.t+=dt;scene.stepN++;simStepCount++;
+        lastParkVal=validateParking(scene.ego,scene.slot,vp);
+        updateMetrics();
+        return;
+      }
+    }
+  }
   stepsSincePlan++;
   if(!trajectory||stepsSincePlan>=cfg.replanEvery){
     planning=true;
-    await computeGrid(perceivedObs,vp);
-    document.getElementById('mGd').textContent=GPU.ms.toFixed(1)+'ms';
     const t1=performance.now();
-    const result=planHybridAStar(scene.ego,goal,vp,cfg.planner);
+    const result=await planDynamicGlobalTrajectory(scene.ego,slotGoal,vp,cfg.planner,perceivedObs);
     lastPlanMs=performance.now()-t1;
+    lastPlanExpanded=result?result.expanded||0:0;
+    lastSTExpanded=result?result.stExpanded||0:0;
     trajectory=result?result.path:null;
+    document.getElementById('mGd').textContent=GPU.ms.toFixed(1)+'ms';
     stepsSincePlan=0;planning=false;
-    planStatus=trajectory?'planning':'nopath';
+    if(!trajectory){
+      planStatus='nopath';
+      scene.ego.v=0;scene.ego.steer=0;
+      moveDynamicObstacles(dt);
+      scene.t+=dt;scene.stepN++;simStepCount++;
+      lastParkVal=validateParking(scene.ego,scene.slot,vp);
+      updateMetrics();
+      return;
+    }
+    planStatus='planning';
   }
+
+  const moveGear=trajectory&&trajectory.length>=2?(trajectory[1].gear||scene.ego.gear):scene.ego.gear;
+  let avoidingNow=false;
+  const forecast=pathCollisionForecast(trajectory,perceivedObs,vp,cfg.frenet.triggerHorizon,cfg.frenet.collisionBuffer);
+  if(cfg.frenet.enabled&&forecast.hit){
+    const t1=performance.now();
+    const fr=planFrenetAvoidance(scene.ego,trajectory,perceivedObs,vp,cfg.frenet,moveGear);
+    lastAvoidCandidates=fr.candidates||0;
+    lastAvoidValid=fr.valid||0;
+    if(fr.path&&fr.path.length>=2){
+      trajectory=fr.path;
+      avoidingNow=true;
+    }else if(cfg.dwa.enabled){
+      const dwa=planDwaFallback(scene.ego,trajectory,perceivedObs,vp,cfg.dwa,moveGear);
+      lastAvoidCandidates+=(dwa&&dwa.candidates)||0;
+      lastAvoidValid+=(dwa&&dwa.path&&dwa.path.length>=2)?1:0;
+      if(dwa&&dwa.path&&dwa.path.length>=2){
+        trajectory=dwa.path;
+        avoidingNow=true;
+      }else{
+        lastAvoidMs=performance.now()-t1;
+        scene.ego.v=0;scene.ego.steer=0;
+        trajectory=null;stepsSincePlan=cfg.replanEvery;
+        planStatus='avoiding';
+        moveDynamicObstacles(dt);
+        scene.t+=dt;scene.stepN++;simStepCount++;
+        lastParkVal=validateParking(scene.ego,scene.slot,vp);
+        updateMetrics();
+        return;
+      }
+    }else{
+      lastAvoidMs=performance.now()-t1;
+      scene.ego.v=0;scene.ego.steer=0;
+      trajectory=null;stepsSincePlan=cfg.replanEvery;
+      planStatus='avoiding';
+      moveDynamicObstacles(dt);
+      scene.t+=dt;scene.stepN++;simStepCount++;
+      lastParkVal=validateParking(scene.ego,scene.slot,vp);
+      updateMetrics();
+      return;
+    }
+    lastAvoidMs=performance.now()-t1;
+    stepsSincePlan=Math.max(stepsSincePlan,cfg.replanEvery-1);
+  }else{
+    lastAvoidMs=0;lastAvoidCandidates=0;lastAvoidValid=0;
+  }
+
   if(trajectory&&trajectory.length>=2){
-    const nxt=trajectory[1],pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
-    scene.ego.gear=nxt.gear;
-    const st=bicStep(scene.ego,nxt.st,nxt.a,vp);
+    const pG=scene.ego.gear,pX=scene.ego.x,pY=scene.ego.y;
+    const ctrl=lqrTrackControl(scene.ego,trajectory,vp,dt);
+    // Gear shift protection: must nearly stop before changing gear
+    const GEAR_SHIFT_V_THRESH=0.08;
+    if(ctrl.gear!==pG&&Math.abs(scene.ego.v)>GEAR_SHIFT_V_THRESH){
+      // Force deceleration instead of immediate gear switch
+      const brakeAccel=clamp(-Math.sign(scene.ego.v)*vp.maxA,-vp.maxA,vp.maxA);
+      scene.ego.steer=ctrl.steer;
+      const st=bicStep(scene.ego,ctrl.steer,brakeAccel,vp);
+      scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
+      totalDist+=hypot(st.x-pX,st.y-pY);
+      advanceTrajectoryWindow(scene.ego,trajectory);
+      moveDynamicObstacles(dt);
+      scene.t+=dt;scene.stepN++;simStepCount++;
+      lastParkVal=validateParking(scene.ego,scene.slot,vp);
+      updateMetrics();
+      return;
+    }
+    scene.ego.gear=ctrl.gear;
+    scene.ego.steer=ctrl.steer;
+    const st=bicStep(scene.ego,ctrl.steer,ctrl.accel,vp);
     scene.ego.x=st.x;scene.ego.y=st.y;scene.ego.yaw=st.yaw;scene.ego.v=st.v;
     totalDist+=hypot(st.x-pX,st.y-pY);
-    if(pG!==nxt.gear)gearSwitches++;
+    if(pG!==ctrl.gear)gearSwitches++;
+    advanceTrajectoryWindow(scene.ego,trajectory);
+  }else{
+    scene.ego.v=0;
   }
-  for(const ob of scene.obstacles){if(ob.vx||ob.vy){ob.x+=(ob.vx||0)*dt;ob.y+=(ob.vy||0)*dt;}}
+  if(planStatus!=='success'){
+    planStatus=avoidingNow?'avoiding':'planning';
+  }
+  moveDynamicObstacles(dt);
   scene.t+=dt;scene.stepN++;simStepCount++;
   // Live parking validation
   lastParkVal=validateParking(scene.ego,scene.slot,vp);
@@ -801,32 +2321,36 @@ async function stepOnce(){
 function showParkScore(pv){
   const el=document.getElementById('PS');
   el.style.display='block';
-  el.innerHTML=`<div style="color:${pv.pass?'var(--ok)':'var(--er)'}">
-    ${pv.pass?'✅ 泊车合格':'❌ 泊车不合格'}</div>
-    <div>航向偏差: ${pv.yawErr.toFixed(1)}° ${pv.yawPass?'✓':'✗'}</div>
-    <div>横向偏差: ${(pv.latErr*100).toFixed(0)}cm ${pv.latPass?'✓':'✗'}</div>
-    <div>线距余量: ${(pv.minLineGap*100).toFixed(0)}cm ${pv.linePass?'✓':'✗'}</div>
-    <div style="color:var(--ev)">综合评分: ${pv.score.toFixed(0)}/100</div>`;
+  el.innerHTML=`<div style="color:${pv.pass?'var(--ok)':'var(--er)'}">${pv.pass?'通过':'未通过'}</div>
+    <div>航向误差: ${pv.yawErr.toFixed(1)}° ${pv.yawPass?'OK':'NO'}</div>
+    <div>横向误差: ${(pv.latErr*100).toFixed(0)}cm ${pv.latPass?'OK':'NO'}</div>
+    <div>纵向误差: ${((pv.longErr||0)*100).toFixed(0)}cm ${(pv.longPass!==false)?'OK':'NO'}</div>
+    <div>压线余量: ${(pv.minLineGap*100).toFixed(0)}cm ${pv.linePass?'OK':'NO'}</div>
+    <div style="color:var(--ev)">评分: ${pv.score.toFixed(0)}/100</div>`;
 }
+
 
 function updateMetrics(){
   document.getElementById('mT').textContent=scene.t.toFixed(1)+'s';
   document.getElementById('mG').textContent=gearSwitches;
   document.getElementById('mD').textContent=totalDist.toFixed(1)+'m';
-  document.getElementById('mPl').textContent=lastPlanMs.toFixed(0)+'ms';
+  const aStarTxt=lastPlanMs>0?`${lastPlanMs.toFixed(0)}ms/${lastPlanExpanded}it`:'--';
+  const stTxt=lastSTExpanded>0?` ST:${lastSTExpanded}`:'';
+  const frTxt=lastAvoidCandidates>0?` F:${lastAvoidMs.toFixed(0)}ms(${lastAvoidValid}/${lastAvoidCandidates})`:'';
+  document.getElementById('mPl').textContent=`${aStarTxt}${stTxt}${frTxt}`;
   document.getElementById('hudT').textContent=scene.t.toFixed(2);
   document.getElementById('hudS').textContent=scene.stepN;
   const sb=document.getElementById('SB');sb.className=planStatus;
-  const labels={idle:'空闲',planning:'规划中',success:'◈ 泊入',nopath:'无路径'};
-  sb.textContent=labels[planStatus]||'—';
-  const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'—';
-  ms.className='MV '+(planStatus==='success'?'ok':planStatus==='nopath'?'er':'');
+  const labels={idle:'空闲',planning:'规划中',docking:'对位中',success:'已泊入',nopath:'无路径',avoiding:'避障中'};
+  sb.textContent=labels[planStatus]||'--';
+  const ms=document.getElementById('mSt');ms.textContent=labels[planStatus]||'--';
+  ms.className='MV '+(planStatus==='success'?'ok':planStatus==='nopath'?'er':planStatus==='avoiding'?'wn':planStatus==='docking'?'gp':'');
   let col=false;for(const ob of scene.obstacles){if(egoCol(scene.ego,cfg.vehicle,ob)){col=true;break;}}
-  const mc=document.getElementById('mCo');mc.textContent=col?'碰撞!':'无';mc.className='MV '+(col?'er':'ok');
+  const mc=document.getElementById('mCo');mc.textContent=col?'碰撞':'无';mc.className='MV '+(col?'er':'ok');
   if(lastParkVal)document.getElementById('mPS').textContent=lastParkVal.score.toFixed(0)+'/100';
 }
 
-// ═══════════ DRAWING ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?DRAWING 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 function draw(){
   const W=canvas.width/dpr,H=canvas.height/dpr;ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
   drawGrid(W,H);if(showCSpace&&GPU.grid)drawCSpace();drawSlot();drawSensorFOV();
@@ -945,7 +2469,7 @@ function drawObs(){
       ctx.fillStyle='rgba(245,158,11,.7)';ctx.beginPath();ctx.moveTo(vl+3,0);ctx.lineTo(vl-3,-2.5);ctx.lineTo(vl-3,2.5);ctx.closePath();ctx.fill();}
     ctx.restore();
     if(ob.kind){ctx.save();ctx.font='500 8px "JetBrains Mono",monospace';ctx.fillStyle='rgba(200,200,200,.35)';ctx.textAlign='center';
-      ctx.fillText(ob.kind,os.x,os.y+(ob.shape==='circle'?(ob.r||0.3)*cam.scale+10:((ob.h||1)*cam.scale/2+10)));ctx.restore();}
+      ctx.fillText(kindText(ob.kind),os.x,os.y+(ob.shape==='circle'?(ob.r||0.3)*cam.scale+10:((ob.h||1)*cam.scale/2+10)));ctx.restore();}
   }
   if(selected&&selected.type==='ob'){
     const ob=scene.obstacles.find(o=>o.id===selected.id);
@@ -973,6 +2497,29 @@ function drawEgo(){
   ctx.fillStyle='rgba(255,255,255,.4)';
   if(e.gear===1){ctx.beginPath();ctx.moveTo(L/2+7,0);ctx.lineTo(L/2-2,-5);ctx.lineTo(L/2-2,5);ctx.closePath();ctx.fill();}
   else if(e.gear===-1){ctx.beginPath();ctx.moveTo(-L/2-7,0);ctx.lineTo(-L/2+2,-5);ctx.lineTo(-L/2+2,5);ctx.closePath();ctx.fill();}
+  // v4-style dual front wheels (tread + steer arrow)
+  const steer=clamp(e.steer||0,-vp.maxSteer,vp.maxSteer);
+  const wl=(vp.wheelLength||0.6)*cam.scale,ww=(vp.wheelWidth||0.25)*cam.scale;
+  const rearAxM=-vp.length/2+vp.rearOverhang,frontAxM=rearAxM+vp.wheelbase;
+  const sideOffsetM=vp.width/2-Math.max(0.10,(vp.wheelWidth||0.25)*0.55);
+  for(const ym of [sideOffsetM,-sideOffsetM]){
+    const wx=frontAxM*cam.scale,wy=ym*cam.scale;
+    ctx.save();ctx.translate(wx,wy);ctx.rotate(-steer);
+    ctx.fillStyle='#0f172a';ctx.strokeStyle='#475569';ctx.lineWidth=1.6;
+    ctx.beginPath();ctx.roundRect(-wl/2,-ww/2,wl,ww,2);ctx.fill();ctx.stroke();
+    ctx.strokeStyle='#64748b';ctx.lineWidth=1.2;
+    ctx.beginPath();ctx.moveTo(-wl*0.33,0);ctx.lineTo(wl*0.33,0);ctx.stroke();
+    if(Math.abs(steer)>0.05){
+      const arrowLen=wl*0.58,arrowSize=Math.max(3,wl*0.16);
+      ctx.strokeStyle='#f59e0b';ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(arrowLen,0);ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(arrowLen,0);ctx.lineTo(arrowLen-arrowSize,-arrowSize*0.6);
+      ctx.moveTo(arrowLen,0);ctx.lineTo(arrowLen-arrowSize,arrowSize*0.6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   // Inflation
   const iL=(vp.length+2*vp.inflation)*cam.scale,iW=(vp.width+2*vp.inflation)*cam.scale;
   ctx.strokeStyle='rgba(56,189,248,.1)';ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.strokeRect(-iL/2,-iW/2,iL,iW);ctx.setLineDash([]);
@@ -996,7 +2543,7 @@ function drawParkResult(){
   ctx.restore();
 }
 
-// ═══════════ EDITOR ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?EDITOR 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 let mode='select',selected=null,dragging=false,dragOff={x:0,y:0},isPanning=false,panLast={x:0,y:0},spaceDown=false;
 
 document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
@@ -1004,71 +2551,84 @@ document.getElementById('toolbar').addEventListener('click',e=>{const b=e.target
   b.classList.add('active');document.getElementById('hudM').textContent=mode.toUpperCase();});
 
 function resetSim(){
-  running=false;trajectory=null;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;
+  normalizePedestrianSpeed(scene.obstacles||[]);
+  pedestrianNavState.clear();
+  running=false;trajectory=null;perceivedObs=[];totalDist=0;gearSwitches=0;lastPlanMs=0;lastPlanExpanded=0;lastSTExpanded=0;
+  lastAvoidMs=0;lastAvoidCandidates=0;lastAvoidValid=0;
+  dockingActive=false;dockingGear=1;dockBlockStreak=0;lastDockRho=Infinity;dockConvergingSteps=0;
   planStatus='idle';stepsSincePlan=999;simStepCount=0;lastParkVal=null;
-  document.getElementById('btnPlay').textContent='▶ 开始';
+  document.getElementById('btnPlay').textContent='开始';
   document.getElementById('btnPlay').classList.remove('running');
   document.getElementById('PS').style.display='none';
   updateMetrics();draw();
 }
 
 document.getElementById('btnPlay').addEventListener('click',()=>{running=!running;
-  document.getElementById('btnPlay').textContent=running?'⏸ 暂停':'▶ 开始';
+  document.getElementById('btnPlay').textContent=running?'暂停':'开始';
   document.getElementById('btnPlay').classList.toggle('running',running);});
+const iSpeedEl=document.getElementById('iSpeed');
+if(iSpeedEl){
+  iSpeedEl.addEventListener('input',e=>{
+    simSpeed=clamp(parseInt(e.target.value||'5',10),1,20);
+    const speedValEl=document.getElementById('speedVal');
+    if(speedValEl)speedValEl.textContent=`${simSpeed}x`;
+  });
+}
 document.getElementById('btnStep').addEventListener('click',()=>{stepOnce().then(()=>draw());});
 document.getElementById('btnReset').addEventListener('click',()=>{scene=mkScene();resetSim();});
 
-// ── Scene Presets ──
+// 鈹€鈹€ Scene Presets 鈹€鈹€
 document.getElementById('btnP1').addEventListener('click',()=>{
-  // 侧方位停车 (parallel)
+  // 渚ф柟浣嶅仠杞?(parallel)
   scene=mkScene();resetSim();
 });
 
 document.getElementById('btnP2').addEventListener('click',()=>{
-  // 垂直泊车
+  // 垂直车位
+  const slot=makeSlot(6.5,1.0,deg2rad(-90),'perpendicular',cfg.vehicle);
   scene={t:0,stepN:0,ego:{x:-4,y:5,yaw:0,v:0,gear:1},
-    slot:{poly:[{x:5,y:3.2},{x:8,y:3.2},{x:8,y:-1.2},{x:5,y:-1.2}],
-      goal:{x:6.5,y:1.0,yaw:deg2rad(-90)},type:'perpendicular'},
+    slot,
     obstacles:[
-      {id:uid(),shape:'rect',x:3.2,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'rect',x:9.8,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'circle',x:1,y:6,yaw:0,r:0.3,vx:0.3,vy:-0.1,kind:'行人'},
-      {id:uid(),shape:'rect',x:-2,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'锥桶'},
-      {id:uid(),shape:'rect',x:12,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'锥桶'}]};
+      {id:uid(),shape:'rect',x:3.2,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'鍋滆溅'},
+      {id:uid(),shape:'rect',x:9.8,y:1.0,yaw:deg2rad(-90),w:4.2,h:1.9,vx:0,vy:0,kind:'鍋滆溅'},
+      {id:uid(),shape:'circle',x:1,y:6,yaw:0,r:0.3,vx:0.3,vy:-0.1,kind:'琛屼汉'},
+      {id:uid(),shape:'rect',x:-2,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'閿ユ《'},
+      {id:uid(),shape:'rect',x:12,y:-1,yaw:0,w:0.5,h:0.5,vx:0,vy:0,kind:'閿ユ《'}]};
   resetSim();
 });
 
 document.getElementById('btnP3').addEventListener('click',()=>{
-  // 斜向泊车 (60°)
-  const ang=deg2rad(60);
+  // 斜向车位：按统一车位尺寸布置，两侧红区不与目标绿区重叠
+  const yaw=deg2rad(-30);
+  const slot=makeSlot(8.0,3.6,yaw,'angled',cfg.vehicle);
+  const sz=getUniformSlotSize(cfg.vehicle);
+  const sideSep=sz.width+0.55;
+  const leftCar=offsetByYaw(slot.goal.x,slot.goal.y,yaw,0.35, sideSep);
+  const rightCar=offsetByYaw(slot.goal.x,slot.goal.y,yaw,-0.35,-sideSep);
   scene={t:0,stepN:0,ego:{x:-3,y:6,yaw:0,v:0,gear:1},
-    slot:{poly:[
-      {x:6,y:3},{x:6+Math.cos(ang)*3,y:3+Math.sin(ang)*3},
-      {x:6+Math.cos(ang)*3-Math.sin(ang)*5,y:3+Math.sin(ang)*3+Math.cos(ang)*5},
-      {x:6-Math.sin(ang)*5,y:3+Math.cos(ang)*5}],
-      goal:{x:6+Math.cos(ang)*1.5-Math.sin(ang)*2.5,y:3+Math.sin(ang)*1.5+Math.cos(ang)*2.5,yaw:ang-PI/2},type:'angled'},
+    slot,
     obstacles:[
-      {id:uid(),shape:'rect',x:4,y:2,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'rect',x:8.5,y:5,yaw:ang,w:1.9,h:4.5,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'circle',x:2,y:7,yaw:0,r:0.3,vx:0.2,vy:0,kind:'行人'}]};
+      {id:uid(),shape:'rect',x:leftCar.x,y:leftCar.y,yaw,w:4.6,h:1.9,vx:0,vy:0,kind:'鍋滆溅'},
+      {id:uid(),shape:'rect',x:rightCar.x,y:rightCar.y,yaw,w:4.6,h:1.9,vx:0,vy:0,kind:'鍋滆溅'},
+      {id:uid(),shape:'circle',x:2,y:7,yaw:0,r:0.3,vx:0.2,vy:0,kind:'琛屼汉'}]};
   resetSim();
 });
 
 document.getElementById('btnP4').addEventListener('click',()=>{
-  // 压力测试 - 多障碍物、动态
+  const slot=makeSlot(10.5,1.0,0,'parallel',cfg.vehicle);
   scene={t:0,stepN:0,ego:{x:-2,y:6,yaw:0,v:0,gear:1},
-    slot:{poly:[{x:7,y:2.5},{x:14,y:2.5},{x:14,y:-0.5},{x:7,y:-0.5}],goal:{x:10.5,y:1.0,yaw:0},type:'parallel'},
+    slot,
     obstacles:[
-      {id:uid(),shape:'rect',x:4.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'rect',x:17,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'停车'},
-      {id:uid(),shape:'circle',x:5,y:7,yaw:0,r:0.3,vx:0.4,vy:-0.12,kind:'行人'},
-      {id:uid(),shape:'circle',x:15,y:8,yaw:0,r:0.3,vx:-0.35,vy:-0.15,kind:'行人'},
-      {id:uid(),shape:'circle',x:8,y:5,yaw:0,r:0.3,vx:-0.2,vy:0.25,kind:'行人'},
-      {id:uid(),shape:'rect',x:0,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
-      {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'锥桶'},
-      {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'护栏'},
-      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.25,vy:0,kind:'自行车'},
-      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.12,vy:0,kind:'推车'}]};
+      {id:uid(),shape:'rect',x:4.5,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'鍋滆溅'},
+      {id:uid(),shape:'rect',x:17,y:1.0,yaw:0,w:4.5,h:1.8,vx:0,vy:0,kind:'鍋滆溅'},
+      {id:uid(),shape:'circle',x:5,y:7,yaw:0,r:0.3,vx:0.4,vy:-0.12,kind:'琛屼汉'},
+      {id:uid(),shape:'circle',x:15,y:8,yaw:0,r:0.3,vx:-0.35,vy:-0.15,kind:'琛屼汉'},
+      {id:uid(),shape:'circle',x:8,y:5,yaw:0,r:0.3,vx:-0.2,vy:0.25,kind:'琛屼汉'},
+      {id:uid(),shape:'rect',x:0,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'閿ユ《'},
+      {id:uid(),shape:'rect',x:20,y:0,yaw:0,w:0.6,h:0.6,vx:0,vy:0,kind:'閿ユ《'},
+      {id:uid(),shape:'rect',x:10,y:8,yaw:0.3,w:2,h:1,vx:0,vy:0,kind:'鎶ゆ爮'},
+      {id:uid(),shape:'circle',x:-1,y:3,yaw:0,r:0.4,vx:0.25,vy:0,kind:'cyclist'},
+      {id:uid(),shape:'rect',x:12,y:5,yaw:0,w:1.2,h:0.8,vx:-0.12,vy:0,kind:'鎺ㄨ溅'}]};
   resetSim();
 });
 
@@ -1081,7 +2641,7 @@ document.getElementById('btnApply').addEventListener('click',()=>{
   if(!evoState.best)return;
   const b=evoState.best;
   if(b.path){trajectory=b.path;planStatus='planning';draw();}
-  alert(`最优参数已应用:\n规划速度=${b.chrome.vPlan.toFixed(2)}\n倒车权重=${b.chrome.wRev.toFixed(2)}\n换挡权重=${b.chrome.wGear.toFixed(2)}\n评分=${b.parkScore.toFixed(0)}/100\n揉库=${b.gears}次\n距离=${b.dist.toFixed(1)}m`);
+  alert(`最优参数已应用:\n规划速度=${b.chrome.vPlan.toFixed(2)}\n倒车权重=${b.chrome.wRev.toFixed(2)}\n换挡权重=${b.chrome.wGear.toFixed(2)}\n评分=${b.parkScore.toFixed(0)}/100\n换挡=${b.gears}次\n距离=${b.dist.toFixed(1)}m`);
 });
 
 // Toggles
@@ -1090,12 +2650,19 @@ document.getElementById('tUSS').addEventListener('click',function(){showUSS=!sho
 
 // IO
 document.getElementById('btnExp').addEventListener('click',()=>{navigator.clipboard.writeText(JSON.stringify(scene,null,2)).catch(()=>{});alert('场景已复制到剪贴板');});
-document.getElementById('btnImp').addEventListener('click',()=>{const j=prompt('粘贴场景JSON:');if(!j)return;try{scene=JSON.parse(j);resetSim();}catch(e){alert('JSON格式错误');}});
+document.getElementById('btnImp').addEventListener('click',()=>{const j=prompt('粘贴场景 JSON:');if(!j)return;try{scene=JSON.parse(j);normalizePedestrianSpeed(scene.obstacles||[]);resetSim();}catch(e){alert('JSON 格式错误');}});
 
 // Keyboard
 window.addEventListener('keydown',e=>{if(e.code==='Space'){spaceDown=true;canvas.style.cursor='grab';}});
 window.addEventListener('keyup',e=>{if(e.code==='Space'){spaceDown=false;canvas.style.cursor='default';}});
-window.addEventListener('keydown',e=>{if(e.key==='Delete'&&selected&&selected.type==='ob'){scene.obstacles=scene.obstacles.filter(o=>o.id!==selected.id);selected=null;draw();}});
+window.addEventListener('keydown',e=>{
+  if(e.key==='Delete'&&selected&&selected.type==='ob'){
+    pedestrianNavState.delete(selected.id);
+    scene.obstacles=scene.obstacles.filter(o=>o.id!==selected.id);
+    selected=null;
+    draw();
+  }
+});
 
 // Canvas events
 canvas.addEventListener('wheel',e=>{e.preventDefault();cam.scale=clamp(cam.scale*(e.deltaY>0?0.92:1.08),8,250);draw();},{passive:false});
@@ -1106,8 +2673,8 @@ canvas.addEventListener('pointerdown',e=>{
   if(mode==='ego'){scene.ego.x=w.x;scene.ego.y=w.y;selected={type:'ego'};draw();return;}
   if(mode==='rect'){const ob={id:uid(),shape:'rect',x:w.x,y:w.y,yaw:0,w:1.8,h:0.8,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
   if(mode==='circle'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.35,vx:0,vy:0,kind:'障碍'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
-  if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-0.3,vy:0,kind:'行人'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
-  if(mode==='slot'){scene.slot.poly=[{x:w.x-2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y+1.2},{x:w.x+2.75,y:w.y-1.2},{x:w.x-2.75,y:w.y-1.2}];scene.slot.goal={x:w.x,y:w.y,yaw:0};selected={type:'slot'};draw();return;}
+  if(mode==='dyn'){const ob={id:uid(),shape:'circle',x:w.x,y:w.y,yaw:0,r:0.3,vx:-PEDESTRIAN_SPEED_MPS,vy:0,kind:'行人'};scene.obstacles.push(ob);selected={type:'ob',id:ob.id};draw();return;}
+  if(mode==='slot'){scene.slot=makeSlot(w.x,w.y,0,'parallel',cfg.vehicle);selected={type:'slot'};draw();return;}
   const hit=pickObj(w.x,w.y);selected=hit;
   if(hit){dragging=true;if(hit.type==='ego')dragOff={x:scene.ego.x-w.x,y:scene.ego.y-w.y};
     else if(hit.type==='ob'){const ob=scene.obstacles.find(o=>o.id===hit.id);if(ob)dragOff={x:ob.x-w.x,y:ob.y-w.y};}
@@ -1137,13 +2704,13 @@ function pickObj(x,y){
 function pBB(p){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;for(const v of p){x0=Math.min(x0,v.x);y0=Math.min(y0,v.y);x1=Math.max(x1,v.x);y1=Math.max(y1,v.y);}return{x0,y0,x1,y1};}
 function pCen(p){let x=0,y=0;for(const v of p){x+=v.x;y+=v.y;}return{x:x/p.length,y:y/p.length};}
 
-// ═══════════ MAIN LOOP ═══════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?MAIN LOOP 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 let lastFrame=0,accum=0;
 async function loop(ts){
   requestAnimationFrame(loop);if(!lastFrame)lastFrame=ts;
   const d=(ts-lastFrame)/1000;lastFrame=ts;
   if(running&&planStatus!=='success'&&!planning){
-    accum+=d;const st=cfg.vehicle.dt;if(accum>st*4)accum=st*4;
+    accum+=d*simSpeed;const st=cfg.vehicle.dt;if(accum>st*8)accum=st*8;
     while(accum>=st){accum-=st;await stepOnce();}
   }
   draw();
@@ -1152,3 +2719,6 @@ initGPU().then(()=>{requestAnimationFrame(loop);draw();updateMetrics();});
 </script>
 </body>
 </html>
+
+
+
