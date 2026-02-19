@@ -55,7 +55,7 @@
 
 ## 📷 预览
 
-*(此处可放置你的 GIF 或截图)*
+![APA Simulation Preview](preview.gif)
 
 ---
 
