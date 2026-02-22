@@ -1613,7 +1613,7 @@ function s2w(sx,sy){return{x:(sx-cam.ox)/cam.scale,y:(cam.oy-sy)/cam.scale};}
 const cfg={
   sensor:{lidarRange:25,lidarFov:180,ussRange:5},
   vehicle:{length:4.6,width:1.9,wheelbase:2.75,frontOverhang:0.95,rearOverhang:0.90,
-    maxSteer:deg2rad(35),maxV:3,maxA:1.5,inflation:0.20,dt:0.2,wheelWidth:0.25,wheelLength:0.6},
+    maxSteer:deg2rad(37),maxV:3,maxA:1.5,inflation:0.10,dt:0.2,wheelWidth:0.25,wheelLength:0.6},
   planner:{maxTime:25,resXY:0.5,resYaw:36,vPlan:1.5,wRev:2,wGear:8,wSteer:1,goalPosTol:0.6,goalYawTol:15,
     motionPrimitives:7,stepLength:0.8,maxIterations:3000,heuristicWeight:1.2,reversePenalty:1.3,
     steerChangePenalty:0.8,steerPenalty:0.3,analyticalDist:5,directStep:0.3,directMaxSteps:30,
