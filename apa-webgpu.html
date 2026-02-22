@@ -110,8 +110,8 @@ backdrop-filter:blur(8px);display:none;line-height:1.7}
    <div class="P"><label>轴距</label><input id="iWB" type="number" step="0.1" value="2.75"><span class="U">m</span></div>
    <div class="P"><label>前悬</label><input id="iFO" type="number" step="0.05" value="0.95"><span class="U">m</span></div>
    <div class="P"><label>后悬</label><input id="iRO" type="number" step="0.05" value="0.90"><span class="U">m</span></div>
-   <div class="P"><label>最大转角</label><input id="iMS" type="number" step="1" value="35"><span class="U">°</span></div>
-   <div class="P"><label>膨胀</label><input id="iIF" type="number" step="0.05" value="0.20"><span class="U">m</span></div>
+   <div class="P"><label>最大转角</label><input id="iMS" type="number" step="1" value="37"><span class="U">°</span></div>
+   <div class="P"><label>膨胀</label><input id="iIF" type="number" step="0.05" value="0.10"><span class="U">m</span></div>
    <div class="P"><label>dt</label><input id="iDT" type="number" step="0.05" value="0.20"><span class="U">s</span></div>
   </div></div>
   <div class="S"><div class="ST">规划器</div><div class="C">
@@ -1644,8 +1644,8 @@ function syncCfg(){
   cfg.vehicle.wheelbase=+document.getElementById('iWB').value||2.75;
   cfg.vehicle.frontOverhang=+document.getElementById('iFO').value||0.95;
   cfg.vehicle.rearOverhang=+document.getElementById('iRO').value||0.90;
-  cfg.vehicle.maxSteer=deg2rad(+document.getElementById('iMS').value||35);
-  cfg.vehicle.inflation=+document.getElementById('iIF').value||0.20;
+  cfg.vehicle.maxSteer=deg2rad(+document.getElementById('iMS').value||37);
+  cfg.vehicle.inflation=+document.getElementById('iIF').value||0.10;
   cfg.vehicle.dt=+document.getElementById('iDT').value||0.2;
   cfg.planner.maxTime=+document.getElementById('iPT').value||25;
   cfg.planner.maxIterations=Math.max(200,+document.getElementById('iMI').value||3000);
