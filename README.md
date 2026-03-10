@@ -25,9 +25,7 @@
 
 ## 📷 预览
 
-<video src="https://raw.githubusercontent.com/woodyhouse/APA_Wviz/main/preview.mp4" controls muted loop playsinline width="100%"></video>
-
-[Open preview video](https://raw.githubusercontent.com/woodyhouse/APA_Wviz/main/preview.mp4)
+![APA Simulation Preview](preview.gif)
 
 ---
 
